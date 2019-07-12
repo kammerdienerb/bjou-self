@@ -1,0 +1,18 @@
+# sliceliteral.bjou
+
+type sliceliteral extends exprbase {
+    src    : astref
+    start  : astref
+    length : astref
+
+
+    proc init(this) {
+        exprbase.init(this)
+    }
+
+    proc create() : sliceliteral {
+        r := { sliceliteral:  }
+        r.init()
+        return r
+    }
+}

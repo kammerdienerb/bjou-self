@@ -1,0 +1,17 @@
+# moduledecl.bjou
+
+type moduledecl extends astbase {
+    ident : string 
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.ident = str()
+    }
+
+    proc create() : moduledecl {
+        r := { moduledecl: }
+        r.init()
+        return r
+    }
+}

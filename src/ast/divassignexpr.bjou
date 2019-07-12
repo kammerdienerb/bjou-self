@@ -1,0 +1,11 @@
+type divassignexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : divassignexpr {
+        r := { divassignexpr: }
+        r.init()
+        return r
+    }
+}

@@ -1,0 +1,15 @@
+type asexpr extends exprbase {
+    expr      : astref
+    type_decl : astref
+
+
+    proc init(this) {
+        exprbase.init(this)
+    }
+
+    proc create() : asexpr {
+        r := { asexpr: }
+        r.init()
+        return r
+    }
+}

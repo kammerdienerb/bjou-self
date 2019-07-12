@@ -1,0 +1,87 @@
+# compilation.bjou
+
+module compilation
+
+using import "measure_time.bjou"
+using import "thread.bjou"
+using import "getrss.bjou"
+
+import "ui.bjou"
+using import "globals.bjou"
+using import "frontend.bjou"
+using import "backend.bjou"
+
+type compilation {
+    replacing    : compilation*
+    args         : ui::argset ref
+    search_paths : string[...]
+    front        : frontend
+    back         : backend
+
+    proc create(args : ui::argset ref) : compilation {
+        r := { compilation:
+                    .args                = args,
+                    .search_paths = [...string],
+                    .front               = frontend.create(),
+                    .back                = backend.create(),
+        }
+
+        r.build_search_paths()
+
+        return r
+    }
+
+    proc free(this) { }
+
+    proc go(this) {
+        this.front.go()
+        this.back.go()
+    }
+
+    proc build_search_paths(this) {
+        this.search_paths.push(str())
+        foreach ref path in this.args.searchpath {
+            if path.len() > 0 {
+                path' := path.copy()
+                if path'.back() != '/' {
+                    path'.append('/')
+                }
+                this.search_paths.push(path')
+            }
+        }
+        this.search_paths.push(str("modules/"))
+        this.search_paths.push(str(SYSTEM_MODULE_PATH))
+    }
+
+    proc abort(this) {
+        __sys::exit(1)
+    }
+}
+
+proc setup_default_compilation(new_compil : compilation ref) {
+    new_compil.replacing = compil
+    compil               = &new_compil
+}
+
+proc start_default_compilation() {
+    beg := measure_time_now_ms()
+
+    (@compil).go()
+
+    end := measure_time_now_ms()
+
+    if compil.args.stats {
+        using ui
+        ms := end - beg
+        report_phase_time("Grand Total", ms, Attr.CYAN, Attr.BOLD)
+        report_lines_per_s(compil.front.total_lines(), compil.front.code_lines(), ms, Attr.BLUE, Attr.BOLD) 
+        report_bytes_per_s(compil.front.n_bytes, ms, Attr.BLUE, Attr.BOLD)
+
+        mem_used := getpeakrss()
+        report_peak_rss(mem_used, ms, Attr.BLUE, Attr.BOLD)
+    }
+
+    this_compil := compil
+    compil       = this_compil.replacing
+    (@this_compil).free()
+}

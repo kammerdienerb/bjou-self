@@ -1,0 +1,16 @@
+type dowhilestmt extends astbase {
+    cond  : astref
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : dowhilestmt {
+        r := { dowhilestmt: }
+        r.init()
+        return r
+    }
+}

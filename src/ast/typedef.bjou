@@ -1,0 +1,18 @@
+# typedef.bjou
+
+type typedef extends declaration {
+    extends_or_alias : astref
+    declarations     : astref[...]
+
+
+    proc init(this) {
+        declaration.init(this)
+        this.declarations = [...astref]
+    }
+
+    proc create() : typedef {
+        r := { typedef: }
+        r.init()
+        return r
+    }
+}

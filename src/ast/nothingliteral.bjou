@@ -1,0 +1,14 @@
+# nothingliteral.bjou
+
+type nothingliteral extends exprbase {
+    proc init(this) {
+        exprbase.init(this)
+    }
+
+    proc create() : nothingliteral {
+        r := { nothingliteral: }
+        r.init()
+
+        return r
+    }
+}

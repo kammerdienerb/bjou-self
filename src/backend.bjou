@@ -1,0 +1,27 @@
+# backend.bjou
+
+module backend
+
+using import "measure_time.bjou"
+
+using import "globals.bjou"
+using import "compilation.bjou"
+
+type backend {
+
+    proc create() : backend {
+        return { backend: }
+    }
+
+    proc go(this) {
+        beg := measure_time_now_ms()
+
+        # do work
+
+        end := measure_time_now_ms()
+        if compil.args.stats {
+            using ui
+            report_phase_time("Back-end", end - beg, Attr.GREEN)
+        }
+    }
+}

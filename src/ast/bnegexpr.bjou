@@ -1,0 +1,16 @@
+# bnegexpr.bjou
+
+type bnegexpr extends exprbase {
+    right : astref
+
+
+    proc init(this) {
+        exprbase.init(this)
+    }
+
+    proc create() : bnegexpr {
+        r := { bnegexpr: }
+        r.init()
+        return r
+    }
+}

@@ -1,0 +1,11 @@
+type bshrexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : callexpr {
+        r := { callexpr: }
+        r.init()
+        return r
+    }
+}

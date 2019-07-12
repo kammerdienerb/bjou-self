@@ -1,0 +1,167 @@
+# integerliteral.bjou
+
+type integerliteral extends exprbase {
+    s_val      : i64
+    u_val      : u64
+    is_hex     : bool
+    is_signed  : bool
+    has_neg    : bool
+    has_suffix : bool
+    width      : u32
+
+
+    proc init(this, s : string ref) {
+        exprbase.init(this)
+
+        if  s.len() > 1
+        and s[0] == '-'
+            this.has_neg = true
+
+        if  s.len() > 2
+        and s[0] == '0'
+        and s[1] == 'x' {
+            this.is_hex = true
+        }
+
+        # capture and remove suffix
+        suffix := str()
+        pos    := s.find('i')
+        if pos == -1
+            pos = s.find('u')
+        if pos != -1 {
+            while pos < s.len() {
+                suffix.append(s[pos])
+                pos += 1
+            }
+            for i := 0; i < suffix.len(); i += 1
+                s.pop()
+        }
+
+        # the defaults
+        this.is_signed = true
+        this.width     = 32
+
+        if this.is_hex {
+            # @libc
+            sscanf(s.c_str(), "%llx", &this.u_val)
+            
+            this.is_signed = false
+
+            bytes := (s.len() - 2) bshr 1
+            if bytes == 0
+                bytes = 1
+            else if (bytes band 0x1)
+                bytes += 1
+
+            this.width = bytes bshl 0x3
+        }
+
+        if suffix.len() == 0 {
+            # @libc
+            sscanf(s.c_str(), "%lld", &this.s_val)
+        } else {
+            this.has_suffix = true
+
+            if suffix[0] == 'u' {
+                this.is_signed = false
+            }
+
+            # @libc
+            sscanf(suffix.c_str() + 1, "%u", &this.width)
+
+            if this.is_signed {
+                # @libc
+                sscanf(s.c_str(), "%lld", &this.s_val)
+            } else {
+                # @libc
+                sscanf(s.c_str(), "%llu", &this.u_val)
+            }
+        }
+    
+        suffix.free()
+
+        # We own s, but don't need it any more. Free it.
+        s.free() 
+    }
+
+    proc create(s : string ref) : integerliteral {
+        r := { integerliteral:  }
+        r.init(s)
+
+        return r
+    }
+
+    proc check(this) {
+        if this.has_neg and this.s_val == 0 {
+            ui::warning_builder.create()
+                .with_message("Ignoring negative sign on literal with value 0.")
+                .add_location(this.cxt)
+                .report()
+                .free()
+        }
+
+        if this.is_signed and this.is_hex {
+            ui::warning_builder.create()
+                .with_message("Ignoring signed suffix specification.")
+                .add_note("Hex literals are always unsigned.")
+                .add_location(this.cxt)
+                .report()
+                .free()
+        }
+        
+        if this.has_suffix and not this.is_signed and this.has_neg {
+            ui::error_builder.create()
+                .with_message("Literal is negative, but type suffix specifies unsigned.")
+                .add_location(this.cxt)
+                .report()
+        }
+        
+        fits := true 
+        if this.is_signed {
+            fits = int_fits_in_width(this.s_val, this.width)
+        } else {
+            fits = uint_fits_in_width(this.u_val, this.width)
+        }
+
+        if not fits {
+            if this.has_suffix {
+                ui::error_builder.create()
+                    .with_message("Literal value is invalid for type specified in its suffix.")
+                    .add_note("value can't be represented with the specified width")
+                    .add_location(this.cxt)
+                    .report()
+            } else {
+                this.width = 64
+            }
+        }
+    }
+}
+
+
+proc int_fits_in_width(s_val : i64, width : u32) : bool {
+    if        width == 8 {
+        if s_val > I8_MAX or s_val < I8_MIN
+            return false
+    } else if width == 16 {
+        if s_val > I16_MAX or s_val < I16_MIN
+            return false
+    } else if width == 32 {
+        if s_val > I32_MAX or s_val < I32_MIN
+            return false
+    }
+    return true
+}
+
+proc uint_fits_in_width(u_val : u64, width : u32) : bool {
+    if        width == 8 {
+        if u_val > U8_MAX
+            return false
+    } else if width == 16 {
+        if u_val > U16_MAX
+            return false
+    } else if width == 32 {
+        if u_val > U32_MAX
+            return false
+    }
+    return true
+}

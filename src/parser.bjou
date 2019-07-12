@@ -1,0 +1,2274 @@
+# parser.bjou
+#
+# parse bJou source files
+
+module parser
+
+using import "random.bjou"
+using import "threadpool.bjou"
+using import "io.bjou"
+using import "measure_time.bjou"
+using import "bucket_array.bjou"
+
+# include "bucket_array.bjou"
+
+using import "token_parsers.bjou"
+using import "ui.bjou"
+using import "utils.bjou"
+using import "frontend.bjou"
+using import "ast.bjou"
+using import "context.bjou"
+using import "debug.bjou"
+using import "operator.bjou"
+using import "globals.bjou"
+
+enum parserkind {
+    INPUT_FILE,
+    IMPORT,
+    INCLUDE
+}
+
+type parser {
+    kind                : parserkind
+    pool                : (threadpool ref | none)
+    fe                  : frontend ref
+    all_nodes           : bucket_array$ast
+    top_level_nodes     : bucket_array$astref
+    path                : string
+    f                   : file
+    buff                : char[]
+    buff_ptr            : char*
+    cur_cxt             : context
+    just_cleaned_cxt    : context
+    n_lines             : u64
+    n_blank_lines       : u64
+    n_bytes             : u64
+    inc_container       : (include_container ref | none)
+    introduction_cxt    : context
+
+
+    proc init(this, f : file, kind : parserkind) {
+        this.kind                = kind
+        this.all_nodes           = bucket_array$ast.create()
+        this.top_level_nodes     = bucket_array$astref.create()
+        this.f                   = f
+        this.path                = str(this.f.path)
+    }
+
+    proc create(fe : frontend ref, f : file, kind : parserkind) : parser {
+        r := { parser: .fe = fe }
+        r.init(f, kind)
+
+        return r
+    }
+
+    proc free(this) {
+        delete this.buff_ptr
+        this.path.free()
+
+        this.f.close()
+
+        # async_parsers clean up themselves.
+        if not this.pool.is_none() {
+            delete &this
+        }
+    }
+
+    proc go(this) {
+        beg := measure_time_now_ms()
+
+        this.cur_cxt.file = this.path
+        this.cur_cxt.beg  = this.cur_cxt.end = { location: .ln = 1, .ch = 1 }
+        
+        this.buff     = this.f.read()
+        this.buff_ptr = this.buff.data()
+        this.f.close()
+        this.n_bytes  = |this.buff|
+
+        this.remove_trailing_space()
+        this.clean()
+        
+        while |this.buff| {
+            node := this.parse_top_level()
+            if node.is_none() {
+                this.error_on_next_token("Unexpeced token.")
+            } else {
+                this.top_level_nodes.push(node)
+            }
+        }
+        
+        end := measure_time_now_ms()
+
+        this.transfer_to_fe()
+
+        if  compil.args.stats
+        and not compil.args.stats_no_files {
+            n_lines_str := str(this.n_lines)
+            report_str := str("Parsed '")
+            report_str.append(this.path)
+            report_str.append("' (")
+            report_str.append(n_lines_str)
+            report_str.append(" lines)")
+            report_phase_time(report_str.c_str(), end - beg, Attr.YELLOW)
+            report_str.free()
+        }
+        
+        # Release memory now so that we don't hang on to 
+        # it until all other threads are done.
+        this.free()
+    }
+
+    proc error_builder_on_next_token(this) : ui::error_builder ref {
+        next_tok_cxt := this.next_token_cxt()
+        return ui::error_builder.create()
+                    .add_location(next_tok_cxt)
+    }
+
+    proc error_on_next_token(this, msg : char*) {
+        this.error_builder_on_next_token()
+            .with_message(msg)
+            .report()
+    }
+
+    proc transfer_to_fe(this) {
+        if not this.pool.is_none() { this.fe.node_lock.lock() }
+    
+        this.fe.n_files       += 1
+        this.fe.n_lines       += this.n_lines
+        this.fe.n_blank_lines += this.n_blank_lines
+        this.fe.n_bytes       += this.n_bytes
+
+        this.fe.all_nodes      = bucket_array::merge_and_steal_data(this.fe.all_nodes, this.all_nodes)
+
+        if this.kind == parserkind.INCLUDE {
+            if ic : include_container ref = this.inc_container {
+                ic.nodes = bucket_array::merge_and_steal_data(ic.nodes, this.top_level_nodes)
+            } else {
+                debug_assert(false, "missing include container")
+            }
+        } else {
+            this.fe.top_level_nodes = bucket_array::merge_and_steal_data(this.fe.top_level_nodes, this.top_level_nodes)
+        }
+       
+        if not this.pool.is_none() { this.fe.node_lock.unlock() }
+    }
+
+    proc parse_top_level(this) : astref {
+        node : astref = nothing
+
+        if (node = this.parse_declaration()).is_none()
+        if (node = this.parse_stmt()       ).is_none()
+        if (node = this.parse_expr()       ).is_none()
+        if (node = this.parse_module_decl()).is_none()
+        {
+            # We found nothing. Return nothing.
+        }
+        
+        return node
+    }
+
+    proc parse_var_decl(this) : astref {
+        if not this.optional$identifier_then_colon(skip_eat: true) {
+            return nothing
+        }
+
+        result    := vardecl.create()
+        result.cxt = result.name_cxt = context.from(this.cur_cxt)
+       
+        this.expect$identifier(result.name, "variable name")
+        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        this.eat(1) # ':'
+
+        if not this.optional$assign(skip_eat: true) {
+            result.type_decl = this.parse_declarator()
+            if result.type_decl.is_none() {
+                err_str := str("Expected type declarator in declaration of variable '")
+                err_str.append(result.name)
+                err_str.append("'.")
+                this.error_on_next_token(err_str.c_str())
+            }
+        }
+       
+        if this.optional$assign() {
+            result.expr = this.parse_expr()
+            if result.expr.is_none() {
+                err_str := str("Invalid expression in initialization of variable '")
+                err_str.append(result.name)
+                err_str.append("'.")
+                this.error_on_next_token(err_str.c_str())
+            }
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_this_param(this) : astref {
+        if not this.optional$kwd_this(skip_eat: true) {
+            return nothing
+        }
+        result := thisparam.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(4) # 'this'
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        return add(this.all_nodes, result)
+    }
+    
+    proc parse_this_type(this) : astref {
+        if not this.optional$kwd_This(skip_eat: true) {
+            return nothing
+        }
+        result := thistype.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(4) # 'This'
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_constant_decl(this) : astref {
+        if not this.optional$kwd_const(skip_eat: true) {
+            return nothing
+        }
+
+        result    := constantdecl.create()
+        result.cxt = result.name_cxt = context.from(this.cur_cxt)
+      
+        this.eat(5) # 'const'
+
+        this.expect$identifier(result.name, "constant name")
+        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        this.eat(1) # ':'
+
+        if not this.optional$assign(skip_eat: true) {
+            result.type_decl = this.parse_declarator()
+            if result.type_decl.is_none() {
+                err_str := str("Expected type declarator in declaration of constant '")
+                err_str.append(result.name)
+                err_str.append("'.")
+                this.error_on_next_token(err_str.c_str())
+            }
+        }
+      
+        this.expect$assign("'='")        
+
+        result.expr = this.parse_expr()
+        if result.expr.is_none() {
+            err_str := str("Invalid expression in initialization of constant '")
+            err_str.append(result.name)
+            err_str.append("'.")
+            this.error_on_next_token(err_str.c_str())
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_stmt(this) : astref {
+        result : astref = nothing
+
+        if (result = this.parse_constant_decl()).is_none()
+        if (result = this.parse_return()       ).is_none()
+        if (result = this.parse_print()        ).is_none()
+        if (result = this.parse_if()           ).is_none()
+        if (result = this.parse_foreach()      ).is_none()
+        if (result = this.parse_for()          ).is_none()
+        if (result = this.parse_while()        ).is_none()
+        if (result = this.parse_dowhile()      ).is_none()
+        if (result = this.parse_break()        ).is_none()
+        if (result = this.parse_continue()     ).is_none()
+        if (result = this.parse_var_decl()     ).is_none()
+        if (result = this.parse_import()       ).is_none()
+        if (result = this.parse_using()        ).is_none()
+        if (result = this.parse_include()      ).is_none()
+        if (result = this.parse_expr()         ).is_none()
+        if (result = this.parse_directive()    ).is_none()
+        {
+            # Found nothing. Return nothing.
+        }
+
+        return result
+    }
+
+    proc parse_stmt_block(this, stmts : astref[...] ref, for_what : char*) {
+        if this.optional$l_brace() {
+            while not this.optional$r_brace() {
+                stmt := this.parse_stmt()
+                if stmt.is_none() {
+                    this.expect$r_brace("'}'")
+                    break
+                }
+                stmts.push(stmt)
+            }
+        } else {
+            stmt := this.parse_stmt()
+            if stmt.is_none() {
+                err_str := concat(str("Expected statement as body of "), str(for_what), str("."))
+                this.error_on_next_token(err_str.c_str())
+            }
+            stmts.push(stmt)
+        }
+    }
+
+    proc parse_print(this) : astref {
+        if not this.optional$kwd_print(skip_eat: true)
+            return nothing
+
+        result    := printstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(5) # 'print'
+
+        result.args = this.parse_arg_list()
+        if result.args.is_none() {
+            this.error_builder_on_next_token()
+                .with_message("Expected argument list for 'print' statement.")
+                .report()
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_return(this) : astref {
+        if not this.optional$kwd_return(skip_eat: true)
+            return nothing
+
+        result    := returnstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(6, skip_clean: true) # 'return'
+
+        if |this.buff| > 0
+        and not this.optional$end_of_line() {
+            this.clean()
+
+            result.expr = this.parse_expr()
+            if result.expr.is_none() {
+                this.error_builder_on_next_token()
+                    .with_message("Invalid expression in return statment.")
+                    .add_note("Note: returning without a value must not have anything following 'return' on the same line")
+                    .report()
+            }
+            result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        } else {
+            if |this.buff| > 0 {
+                this.n_lines += 1
+            }
+            result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+            result.cxt.end.ch -= 1 # Account for the newline.
+            this.clean()
+        }
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_if(this) : astref {
+        if not this.optional$kwd_if(skip_eat: true)
+            return nothing
+       
+        result    := ifstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(2) # 'if'
+
+        if this.optional$identifier_then_colon(skip_eat: true) {
+            result.cond = this.parse_var_decl()
+            result.set_flag(ast_flag.IS_DESTRUCTURE)
+        } else {
+            result.cond = this.parse_expr()
+        }
+
+        if result.cond.is_none() {
+            this.error_on_next_token("Invalid conditional expression in 'if' statement.")
+        }
+
+        this.parse_stmt_block(result.stmts, "'if' statement")
+        result.else_block = this.parse_else()
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_else(this) : astref {
+        if not this.optional$kwd_else(skip_eat: true)
+            return nothing
+       
+        result    := elsestmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(4) # 'else'
+
+        this.parse_stmt_block(result.stmts, "'else' block")
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_foreach(this) : astref {
+        if not this.optional$kwd_foreach(skip_eat: true)
+            return nothing
+       
+        result    := foreachstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(7) # 'foreach'
+
+        if this.optional$kwd_ref() {
+            result.set_flag(ast_flag.FOREACH_TAKE_REF)
+        }
+
+        this.expect$identifier(result.ident, "identifier")
+        this.expect$kwd_in("'in'")
+
+        result.expr = this.parse_expr()
+        if result.expr.is_none() {
+            this.error_on_next_token("Invalid expression in 'foreach' loop.")
+        }
+
+        this.parse_stmt_block(result.stmts, "'foreach' loop")
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_for(this) : astref {
+        if not this.optional$kwd_for(skip_eat: true)
+            return nothing
+       
+        result    := forstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(3) # 'for'
+
+        result.ini = this.parse_var_decl()
+        if result.ini.is_none() {
+            result.ini = this.parse_expr()
+        }
+        this.expect$semicolon("';'")
+        result.cond = this.parse_expr()
+        if result.cond.is_none() {
+            this.error_on_next_token("Invalid conditional expression in 'for' loop.")
+        }
+        this.expect$semicolon("';'")
+        result.step = this.parse_expr()
+
+        this.parse_stmt_block(result.stmts, "'for' loop")
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_while(this) : astref {
+        if not this.optional$kwd_while(skip_eat: true)
+            return nothing
+       
+        result    := whilestmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(5) # 'while'
+
+        if this.optional$identifier_then_colon(skip_eat: true) {
+            result.cond = this.parse_var_decl()
+            result.set_flag(ast_flag.IS_DESTRUCTURE)
+        } else {
+            result.cond = this.parse_expr()
+        }
+
+        if result.cond.is_none() {
+            this.error_on_next_token("Invalid conditional expression in 'while' loop.")
+        }
+
+        this.parse_stmt_block(result.stmts, "'while' loop")
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_dowhile(this) : astref {
+        if not this.optional$kwd_do(skip_eat: true)
+            return nothing
+       
+        result    := dowhilestmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(2) # 'do'
+
+        this.parse_stmt_block(result.stmts, "'do while' loop")
+
+        this.expect$kwd_while("'while'")
+
+        result.cond = this.parse_expr()
+        if result.cond.is_none() {
+            this.error_on_next_token("Invalid conditional expression in 'do while' loop.")
+        }
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_break(this) : astref {
+        if not this.optional$kwd_break(skip_eat: true)
+            return nothing
+
+        result := breakstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(5) # 'break'
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_continue(this) : astref {
+        if not this.optional$kwd_continue(skip_eat: true)
+            return nothing
+
+        result := continuestmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(8) # 'continue'
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_directive(this) : astref {
+        if not this.optional$back_slash(skip_eat: true)
+            return nothing
+
+        result    := directive.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(1) # '\'
+
+        this.expect$identifier_allow_reserved(result.name, "directive name")
+        this.expect$l_brace("'{'")
+
+        while true {
+            node : astref = nothing
+            if (node = this.parse_top_level() ).is_none()
+            if (node = this.parse_declarator()).is_none() {
+                break
+            }
+        }
+        this.expect$r_brace("'}'")
+        
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_module_decl(this) : astref {
+        if not this.optional$kwd_module(skip_eat: true)
+            return nothing
+
+        result    := moduledecl.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(6) # 'import'
+
+        this.expect$identifier(result.ident, "module name")
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        if this.top_level_nodes.len() > 0 {
+            ui::error_builder.create()
+                .with_message("Module declarations must be at the beginning of the file.")
+                .add_location(result.cxt)
+                .report()
+        }
+
+        return add(this.all_nodes, result)
+    }
+
+    proc launch_import(this, path : string ref, intro_cxt : context ref) {
+        f        := open_file(path, search_paths: true)
+        new_path := str(f.path)
+
+        if pool : threadpool ref = this.pool {
+            if this.fe.first_encounter_of_file_locked(new_path) {
+                p                 := new async_parser
+                @p                 = async_parser.create(this.fe, pool, f, kind: parserkind.IMPORT)
+                p.introduction_cxt = intro_cxt
+
+                pool.add_task(async_parser_wrapper, p)
+            }
+
+            new_path.free()
+        } else {
+            if this.fe.first_encounter_of_file(new_path) {
+                new_path.free()
+
+                p := parser.create(this.fe, f, kind: parserkind.IMPORT)
+                p.introduction_cxt = intro_cxt
+                p.go()
+            }
+        }
+    }
+
+    proc launch_include(this, path : string ref, container : include_container ref, intro_cxt : context ref) {
+        f        := open_file(path, search_paths: true)
+        new_path := str(f.path)
+
+        if pool : threadpool ref = this.pool {
+            if not this.fe.first_encounter_of_file_locked(new_path) {
+                frontend::multiple_include_error(path, intro_cxt)
+            }
+
+            new_path.free()
+
+            p                 := new async_parser
+            @p                 = async_parser.create(this.fe, pool, f, kind: parserkind.INCLUDE)
+            p.inc_container    = container
+            p.introduction_cxt = intro_cxt
+                
+            pool.add_task(async_parser_wrapper, p)
+        } else {
+            if not this.fe.first_encounter_of_file(new_path) {
+                frontend::multiple_include_error(path, intro_cxt)
+            }
+            
+            new_path.free()
+
+            p                 := parser.create(this.fe, f, kind: parserkind.INCLUDE)
+            p.inc_container    = container
+            p.introduction_cxt = intro_cxt
+
+            p.go()
+        }
+    }
+
+    proc parse_import(this) : astref {
+        if not this.optional$kwd_import(skip_eat: true)
+            return nothing
+
+        result    := importstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(6) # 'import'
+
+        path_with_quotes := { string: }
+        intro_cxt        := context.from(this.cur_cxt)
+        this.expect$string_literal(path_with_quotes, "module name/path")
+        intro_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        result.path = path_with_quotes.substr(1, path_with_quotes.len() - 2)
+        path_with_quotes.free()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        this.launch_import(result.path, intro_cxt)
+
+        r := add(this.all_nodes, result)
+
+        return r
+    }
+
+    proc parse_using(this) : astref {
+        if not this.optional$kwd_using(skip_eat: true)
+            return nothing
+
+        result    := usingstmt.create()
+        result.cxt = context.from(this.cur_cxt)
+        
+        this.eat(5) # 'using'
+
+        result.imprt = this.parse_import()
+        if result.imprt.is_none() {
+            ident := { string: }
+            this.expect$identifier(ident, "module name")
+            result.ident = ident
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_include(this) : astref {
+        if not this.optional$kwd_include(skip_eat: true)
+            return nothing
+        
+        result    := includestmt.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(7) # 'include'
+
+        path_with_quotes := { string: }
+        intro_cxt        := context.from(this.cur_cxt)
+        this.expect$string_literal(path_with_quotes, "path")
+        intro_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        result.path = path_with_quotes.substr(1, path_with_quotes.len() - 2)
+        path_with_quotes.free()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        if this.pool.is_none() {
+            ic := this.fe.get_next_include_container()
+            result.container = ic
+            this.launch_include(result.path, ic, intro_cxt)
+        } else {
+            ic := this.fe.get_next_include_container_locked()
+            result.container = ic
+            this.launch_include(result.path, ic, intro_cxt)
+        }
+
+        r := add(this.all_nodes, result)
+
+        return r
+    }
+
+    proc parse_declaration(this) : astref {
+        result : astref = nothing
+
+        if (result = this.parse_proc_def()     ).is_none()
+        if (result = this.parse_type_def()     ).is_none()
+        if (result = this.parse_enum_def()     ).is_none()
+        if (result = this.parse_constant_decl()).is_none()
+        if (result = this.parse_extern()       ).is_none()
+        if (result = this.parse_var_decl()     ).is_none()
+        if (result = this.parse_directive()    ).is_none()
+        {
+            # Found nothing. Return nothing.
+        }
+
+        return result
+    }
+
+    proc parse_proc_def(this) : astref {
+        if not this.optional$kwd_proc(skip_eat: true)
+            return nothing
+
+        result             := procdef.create()
+        result.cxt          = context.from(this.cur_cxt)
+        template_result    := templateprocdef.create()
+        template_result.cxt = context.from(this.cur_cxt)
+
+        anon_cxt := context.from(this.cur_cxt)
+        this.eat(4)
+        anon_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        no_mangle := this.optional$kwd___no_mangle__()
+        is_inline := this.optional$kwd___inline__()
+        
+        result.name_cxt = context.from(this.cur_cxt)
+
+        if no_mangle    { result.set_flag(ast_flag.NO_MANGLE) }
+        if is_inline    { result.set_flag(ast_flag.IS_INLINE) }
+      
+        ident := { string: }
+        has_ident := this.optional$identifier(ident)
+        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        if not has_ident {
+            ident = make_uid("anon_p")
+            result.set_flag(ast_flag.ANONYMOUS_PROC)
+        }
+        result.name = ident
+
+        template_def := this.parse_template_def()
+        is_template  := not template_def.is_none()
+        if is_template {
+            if no_mangle {
+                ui::error_builder.create()
+                    .with_message("Template procedures cannot be __no_mangle__.")
+                    .add_location(result.name_cxt)
+                    .report()
+            }
+
+            if not has_ident {
+                ui::error_builder.create()
+                    .with_message("Anonymous procedures cannot be templates.")
+                    # @unsafe
+                    # We just checked that template_def is not none.
+                    .add_location(unsafe_baseref(template_def).cxt)
+                    .report()
+            }
+
+            template_result.template_def = template_def
+        }
+
+        if result.get_flag(ast_flag.ANONYMOUS_PROC) {
+            this.expect$l_paren("identifier or '(' to begin an anonymous procedure")
+        } else {
+            this.expect$l_paren("'('")
+        }
+
+        while not this.optional$r_paren() {
+            param := this.parse_var_decl()
+            if param.is_none() {
+                param = this.parse_this_param()
+                if param.is_none() {
+                    this.error_on_next_token("Expected procedure parameter declaration.")
+                }
+            }
+
+            result.param_decls.push(param)
+
+            if not this.optional$comma() {
+                this.expect$r_paren("')'")
+                break
+            }
+        }
+
+        if this.optional$colon() {
+            result.ret_decl = this.parse_declarator()
+            if result.ret_decl.is_none() {
+                this.error_on_next_token("Expected return type declarator for procedure declaration.")
+            }
+        } else {
+            void_decl        := ast::new_void_declarator(this.all_nodes)
+            void_decl.cxt     = this.just_cleaned_cxt
+            void_decl.cxt.end = void_decl.cxt.beg
+            result.ret_decl   = add(this.all_nodes, void_decl)
+        }
+
+        this.parse_stmt_block(result.stmts, "procedure")
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        template_result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        if is_template {
+            template_result.template = add(this.all_nodes, result)
+            template_result.name     = result.name.copy()
+            template_result.name_cxt = result.name_cxt
+            return add(this.all_nodes, template_result)
+        }
+
+        # @destroy ??
+        # template_result.destroy()
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_template_def(this) : astref {
+        if not this.optional$dollar(skip_eat: true)
+            return nothing
+
+        result     := templatedef.create()
+        result.cxt  = context.from(this.cur_cxt)
+
+        this.eat(1)
+
+        if this.optional$l_paren() {
+            while not this.optional$r_paren() {
+                ident := { string: }
+                this.expect$identifier(ident, "template parameter name")
+                result.names.push(ident)
+                
+                if not this.optional$comma() {
+                    this.expect$r_paren("')'")
+                    break
+                }
+            }
+
+            if |result.names| == 0 {
+                result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                ui::error_builder.create()
+                    .with_message("Empty template parameter list not allowed.")
+                    .add_location(result.cxt)
+                    .report()
+            }
+        } else {
+            ident := { string: }
+            this.expect$identifier(ident, "template parameter name")
+            result.names.push(ident)
+        }
+        
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_type_def(this) : astref {
+        if  not this.optional$kwd_type(skip_eat: true)
+        and not this.optional$kwd_abstract(skip_eat: true)
+            return nothing
+
+        result             := typedef.create()
+        result.cxt          = context.from(this.cur_cxt)
+        template_result    := templatetypedef.create()
+        template_result.cxt = context.from(this.cur_cxt)
+
+        is_abstract := this.optional$kwd_abstract()
+
+        this.expect$kwd_type("'type'")
+
+        result.name_cxt = context.from(this.cur_cxt)
+        this.expect$identifier(result.name, "type name")
+        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        template_result.name     = result.name.copy()
+        template_result.name_cxt = result.name_cxt
+
+        template_def := this.parse_template_def() 
+
+        if this.optional$assign() {
+            if is_abstract {
+                err_str := concat(str("'"), result.name.copy(), str("' is a type alias."))
+                ui::error_builder.create()
+                    .with_message("Only struct types can be abstract.")
+                    .add_note(err_str.c_str())
+                    .report()
+            }
+            result.extends_or_alias = this.parse_declarator()
+        } else {
+            if this.optional$kwd_extends() {
+                result.extends_or_alias = this.parse_declarator()
+                if result.extends_or_alias.is_none() {
+                    this.error_on_next_token("Expected type  declarator after 'extends'.")
+                }
+            }
+
+            this.expect$l_brace("'{'")
+            while true {
+                decl := this.parse_declaration()
+                if decl.is_none() { break }
+                result.declarations.push(decl)
+            }
+            this.expect$r_brace("'}'")
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        template_result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        if not template_def.is_none() {
+            template_result.template_def = template_def
+            template_result.template     = add(this.all_nodes, result)
+
+            return add(this.all_nodes, template_result)
+        }
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_enum_def(this) : astref {
+        if not this.optional$kwd_enum(skip_eat: true)
+            return nothing
+
+        result    := enumdef.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(4) # 'enum'
+
+        result.name_cxt = context.from(this.cur_cxt)
+        this.expect$identifier(result.name, "enum name")
+        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        this.expect$l_brace("'{'")
+
+        while not this.optional$r_brace() {
+            ident := { string: }
+            this.expect$identifier(ident, "identifier")
+            result.identifiers.push(ident)
+
+            if not this.optional$comma() {
+                this.expect$r_brace("'}'")
+                break
+            }
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_extern(this) : astref {
+        if not this.optional$kwd_extern(skip_eat: true)
+            return nothing
+
+        result : astref = nothing
+
+        cxt := context.from(this.cur_cxt)
+        this.eat(6) # 'extern'
+
+        if (result = this.parse_extern_proc()).is_none()
+        if (result = this.parse_extern_var() ).is_none() {
+            this.error_on_next_token("Expected procedure or variable declaration after 'extern'.")
+        }
+
+        # @unsafe
+        # The only path resulting in 'nothing' result produces an error.
+        unsafe_baseref(result).cxt.beg = cxt.beg
+
+        return result
+    }
+
+    proc parse_extern_proc(this) : astref {
+        # @temporary
+        # if not this.optional$kwd_proc(skip_eat: true)
+        #     return nothing
+
+        result             := procdef.create()
+        result.cxt          = context.from(this.cur_cxt)
+
+        result.set_flag(ast_flag.IS_EXTERN)
+
+        # @temporary
+        # this.eat(4)
+
+        result.name_cxt = context.from(this.cur_cxt)
+        this.expect$identifier(result.name, "extern procedure name")
+        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        this.expect$l_paren("'('")
+
+        while not this.optional$r_paren() {
+            if this.optional$ellipsis() {
+                result.set_flag(ast_flag.IS_VARARG)
+            } else {
+                if result.get_flag(ast_flag.IS_VARARG) {
+                    this.error_on_next_token("An extern procedure may only use variadic arguments ('...') as the last argument in the signature.")
+                }
+
+                param_type := this.parse_declarator()
+                if param_type.is_none() {
+                    this.error_on_next_token("Expected extern procedure parameter type declarator.")
+                }
+
+                param := vardecl.create()
+                hint  := concat(result.name.copy(), str("_param"))
+                param.name = make_uid(hint.c_str())
+                hint.free()
+                param.type_decl = param_type
+
+                result.param_decls.push(add(this.all_nodes, param))
+            }
+
+            if not this.optional$comma() {
+                this.expect$r_paren("')'")
+                break
+            }
+        }
+
+        if this.optional$colon() {
+            result.ret_decl = this.parse_declarator()
+            if result.ret_decl.is_none() {
+                this.error_on_next_token("Expected return type declarator for procedure declaration.")
+            }
+        } else {
+            void_decl        := ast::new_void_declarator(this.all_nodes)
+            void_decl.cxt     = this.just_cleaned_cxt
+            void_decl.cxt.end = void_decl.cxt.beg
+            result.ret_decl   = add(this.all_nodes, void_decl)
+        }
+
+        return add(this.all_nodes, result)
+    }
+    
+    proc parse_extern_var(this) : astref {
+        result := this.parse_var_decl()
+
+        if result' : ast ref = result {
+            # @unsafe
+            # parse_var_decl() doesn't return a valid reference
+            # to an invalid ast.
+            unsafe_baseref(result').set_flag(ast_flag.IS_EXTERN)
+        }
+
+        return result
+    }
+
+    proc __inline__ parse_expr(this) : astref
+        return this.parse_expr(min_precedence: 0)
+
+    proc parse_expr(this, min_precedence : int) : astref {
+        expr := this.parse_operand()
+
+        if expr.is_none()    { return nothing }
+
+        expr = this.parse_expr_more(expr, min_precedence)
+        return expr
+    }
+
+    proc parse_expr_more(this, left : astref, min_precedence : int) : astref {
+        # based on algorithm found here:
+        # https://en.wikipedia.org/wiki/Operator-precedence_parser#Pseudo-code
+
+        result : astref = nothing
+        right  : astref = nothing
+        
+        # lookahead := peek next token
+        # while lookahead is a binary operator whose precedence is >= min_precedence
+        #     op := lookahead
+       
+        op := Op.INVALID
+        while (op = this.look_ahead_binary_op()) != Op.INVALID
+        and    prec(op) >= min_precedence {
+            # advance to next token
+            # rhs := parse_primary()
+
+            split          := false
+            split_cxt      := context.from(this.cur_cxt)
+
+            binop_cxt := context.from(this.cur_cxt)
+
+            if op == Op.SUBSCRIPT {
+                this.eat(1) # '['
+                right = this.parse_expr()
+                if right' : ast ref = right {
+                    # @unsafe
+                    unsafe_baseref(right').cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                    this.expect$r_bracket("']'")
+                    split = true
+                    split_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                } else {
+                    binop_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                    this.error_builder_on_next_token()
+                        .with_message("Missing operand to binary expression.")
+                        .add_location("Here is the binary operator:", binop_cxt)
+                        .report()
+                }
+            } else if op == Op.CALL {
+                this.eat(1) # '('
+                right = this.parse_arg_list()
+                if right' : ast ref = right {
+                    # @unsafe
+                    unsafe_baseref(right').cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                    this.expect$r_paren("')'")
+                    split = true
+                    split_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                } else {
+                    this.expect$r_paren("')'")
+                    return nothing
+                }
+            } else {
+                this.eat(str_of(op))
+                binop_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                if is_binary(op) {
+                    right = this.parse_operand()
+                    if right.is_none() {
+                        this.error_builder_on_next_token()
+                            .with_message("Missing operand to binary expression.")
+                            .add_location("Here is the binary operator:", binop_cxt)
+                            .report()
+                    }
+                }
+            }
+
+            op_prec := prec(op)
+
+            # lookahead := peek next token
+            # while lookahead is a binary operator whose
+            # precedence is greater than op's, or a
+            # right-associative operator whose precedence is
+            # equal to op's
+
+            lookahead_op := Op.INVALID
+
+            while(((lookahead_op = this.look_ahead_binary_op()) != Op.INVALID)
+              and (prec(lookahead_op) > op_prec))
+            or    ((assoc(lookahead_op) == Assoc.RIGHT)
+              and (prec(lookahead_op) == op_prec)) {
+
+                # rhs := parse_expression_1 (rhs, lookahead's precedence)
+                right = this.parse_expr_more(right, prec(lookahead_op))
+                if right.is_none() {
+                    this.error_builder_on_next_token()
+                        .with_message("Missing operand to binary expression.")
+                        .add_location("Here is the binary operator:", binop_cxt)
+                        .report()
+                }
+            }
+
+            # lhs := the result of applying op with operands lhs and rhs
+           
+            result = this.new_bin_expr_from_op(op)
+            debug_assert(not result.is_none(), "result is nothing")
+            # @unsafe
+            # The only path in new_bin_expr_from_op() that procuces
+            # a result of nothing, traps with a debug_assert().
+            bin_result := refcast$binexprbase(unsafe_baseref(result))
+
+            debug_assert(not left.is_none(),   "left is nothing")
+            debug_assert(not right.is_none(),  "right is nothing")
+
+            bin_result.left  = left
+            bin_result.right = right
+
+            # @unsafe
+            # We just debug_assert()ed that left is not nothing.
+            bin_result.cxt = unsafe_baseref(left).cxt
+
+            if split {
+                bin_result.cxt.end = split_cxt.end
+            } else {
+                # @unsafe
+                # We just debug_assert()ed that right is not nothing.
+                bin_result.cxt.end = unsafe_baseref(right).cxt.end
+            }
+
+            # Check for a type cast.
+            if this.optional$kwd_as() {
+                result = this.apply_cast(result, left, right, op, min_precedence)
+            }
+
+            left = result
+        }
+
+        result = left
+
+        # Check for a type cast again.
+        if this.optional$kwd_as() {
+            result = this.apply_cast(result, left, right, op, min_precedence)
+        }
+
+        return result
+    }
+
+    proc apply_cast(this, expr : astref, left : astref, right : astref, bin_op : Op, min_precedence : int) : astref {
+
+        # Here, we try to skip applying a cast if the current binop is of a
+        # higher precedence (access, call, etc..). Otherwise, if there is no binop
+        # or if we've reached the end of the expression and the current binop is
+        # higher precedence (see operator.bjou for this number), we apply the
+        # cast to the whole thing. If it is of lower precedence, we only apply
+        # it to the immediate sub expression.
+
+        result   := expr
+        cast     := asexpr.create()
+        bin_prec := prec(bin_op)
+        as_prec  := prec(Op.AS)
+        # @unsafe
+        # 'result' is 'result' from parse_expr_more.
+        # It is verified there before being passed to this procedure.
+        expr_cxt  := unsafe_baseref(expr).cxt
+
+        cast.cxt       = expr_cxt
+        cast.type_decl = this.parse_declarator()
+        if cast.type_decl.is_none() {
+            this.error_on_next_token("Expected type declarator for 'as' type cast.")
+        }
+        
+        cast.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        cast_slot := add(this.all_nodes, cast)
+
+        if bin_op == Op.INVALID
+        or ((min_precedence == 0) and (bin_prec > as_prec)) {
+            cast.expr = expr
+            result = cast_slot
+        } else if (bin_op != Op.INVALID) and (bin_prec <= as_prec) {
+            # @unsafe
+            # 'right' is 'right' from parse_expr_more.
+            # It is verified there before being passed to this procedure.
+            right_cxt   := unsafe_baseref(right).cxt
+            cast.expr    = right
+            cast.cxt.beg = right_cxt.beg
+            # @unsafe
+            # See above note.
+            bin_expr := refcast$binexprbase(unsafe_baseref(result))
+            bin_expr.right = cast_slot
+        }
+
+        return result
+    }
+
+    proc new_bin_expr_from_op(this, op : Op) : astref {
+        result_astref   := get_next_node_slot(this.all_nodes)
+        # @unsafe
+        # We just recieved this astref from get_next_node_slot(), which
+        # will always provide a valid reference into the bucket array.
+        result : ast ref = unsafe_ast_ref(result_astref)
+
+        if      op == Op.CALL         { result = callexpr.create()        }
+        else if op == Op.SUBSCRIPT    { result = subscriptexpr.create()   }
+        else if op == Op.DOT          { result = dotexpr.create()         }
+        else if op == Op.MULT         { result = multexpr.create()        }
+        else if op == Op.DIV          { result = divexpr.create()         }
+        else if op == Op.MOD          { result = modexpr.create()         }
+        else if op == Op.PLUS         { result = plusexpr.create()        }
+        else if op == Op.MINUS        { result = minusexpr.create()       }
+        else if op == Op.BSHL         { result = bshlexpr.create()        }
+        else if op == Op.BSHR         { result = bshrexpr.create()        }
+        else if op == Op.LSS          { result = lssexpr.create()         }
+        else if op == Op.LEQ          { result = leqexpr.create()         }
+        else if op == Op.GTR          { result = gtrexpr.create()         }
+        else if op == Op.GEQ          { result = geqexpr.create()         }
+        else if op == Op.EQU          { result = equexpr.create()         }
+        else if op == Op.NEQ          { result = neqexpr.create()         }
+        else if op == Op.BAND         { result = bandexpr.create()        }
+        else if op == Op.BXOR         { result = bxorexpr.create()        }
+        else if op == Op.BOR          { result = borexpr.create()         }
+        else if op == Op.AND          { result = andexpr.create()         }
+        else if op == Op.OR           { result = orexpr.create()          }
+        else if op == Op.ASSIGN       { result = assignexpr.create()      }
+        else if op == Op.MULT_ASSIGN  { result = multassignexpr.create()  }
+        else if op == Op.DIV_ASSIGN   { result = divassignexpr.create()   }
+        else if op == Op.MOD_ASSIGN   { result = modassignexpr.create()   }
+        else if op == Op.PLUS_ASSIGN  { result = plusassignexpr.create()  }
+        else if op == Op.MINUS_ASSIGN { result = minusassignexpr.create() }
+        else {
+            debug_assert(false, "invalid binary operator")
+            return nothing # @leak result slot. Should never get here.
+        }
+
+        return result
+    }
+
+    proc parse_operand(this) : astref {
+        op  := this.look_ahead_unary_prefix_op()
+        
+        if op == Op.INVALID {
+            leaf := this.parse_leaf_expr()
+            return leaf
+        }
+        
+        cxt := context.from(this.cur_cxt)
+
+        result : astref = nothing
+
+        if op == Op.NEW {
+            this.eat(3) # 'new'
+
+            n          := newexpr.create()
+            n.type_decl = this.parse_declarator()
+            if n.type_decl.is_none() {
+                this.error_on_next_token("Expected type declarator after 'new'.")
+            }
+            result = add(this.all_nodes, n)
+        } else if op == Op.SIZEOF {
+            this.eat(6) # 'sizeof'
+
+            s          := sizeofexpr.create()
+            s.type_decl = this.parse_declarator()
+            if s.type_decl.is_none() {
+                this.error_on_next_token("Expected type declarator after 'delete'.")
+            }
+            result = add(this.all_nodes, s)
+        } else {
+            if op == Op.NOT {
+                this.eat(3) # 'not'
+
+                n      := notexpr.create()
+                n.right = this.parse_operand()
+                if n.right.is_none() {
+                    this.error_on_next_token("Invalid operand to 'not' expression.")
+                }
+                n.right = this.parse_expr_more(n.right, HIGHEST_BIN_PREC)
+                result  = add(this.all_nodes, n)
+            } else if op == Op.ADDR {
+                this.eat(1) # '&'
+                
+                a      := addrexpr.create()
+                a.right = this.parse_operand()
+                if a.right.is_none() {
+                    this.error_on_next_token("Invalid operand to '&' expression.")
+                }
+                a.right = this.parse_expr_more(a.right, HIGHEST_BIN_PREC)
+                result  = add(this.all_nodes, a)
+            } else if op == Op.DEREF {
+                this.eat(1) # '@'
+                
+                d      := derefexpr.create()
+                d.right = this.parse_operand()
+                if d.right.is_none() {
+                    this.error_on_next_token("Invalid operand to '@' expression.")
+                }
+                d.right = this.parse_expr_more(d.right, HIGHEST_BIN_PREC)
+                result  = add(this.all_nodes, d)
+            } else if op == Op.BNEG {
+                this.eat(4) # 'bneg'
+                
+                b      := bnegexpr.create()
+                b.right = this.parse_operand()
+                if b.right.is_none() {
+                    this.error_on_next_token("Invalid operand to 'bneg' expression.")
+                }
+                b.right = this.parse_expr_more(b.right, HIGHEST_BIN_PREC)
+                result  = add(this.all_nodes, b)
+            } else if op == Op.DELETE {
+                this.eat(6) # 'delete'
+                
+                d      := deleteexpr.create()
+                d.right = this.parse_operand()
+                if d.right.is_none() {
+                    this.error_on_next_token("Invalid operand to 'delete'.")
+                }
+                d.right = this.parse_expr_more(d.right, HIGHEST_BIN_PREC)
+                result  = add(this.all_nodes, d)
+            } else {
+                debug_assert(false, "unhandled op")
+                return nothing
+            }
+
+            cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+            # @unsafe
+            # All successful branches give us a valid result.
+            unsafe_baseref(result).cxt = cxt
+            return result
+        }
+        
+        cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        # @unsafe
+        # All successful branches give us a valid result.
+        unsafe_baseref(result).cxt = cxt
+
+        result = this.parse_expr_more(result, HIGHEST_BIN_PREC)
+        
+        return result
+    }
+
+    proc look_ahead_binary_op(this) : Op {
+        op   := Op.INVALID
+        line := this.cur_cxt.beg.ln
+
+        # @performance
+        # It might be beneficial to reorder these so that the most common operators
+        # are checked first, saving some branches on the average case.
+        # NOTE: started this, but I've not really done any measurment.
+        # NOTE the second: The order of some of these are sensitive. e.g.
+        # LEQ must come before LSS.
+
+        if      this.optional$l_paren      (skip_eat: true) { op = Op.CALL
+            # Calls must be on the same line.
+            if line != this.cur_cxt.end.ln
+                return Op.INVALID                                                  }
+        else if this.optional$dot          (skip_eat: true) { op = Op.DOT          }
+        else if this.optional$l_bracket    (skip_eat: true) { op = Op.SUBSCRIPT    }
+        else if this.optional$equ          (skip_eat: true) { op = Op.EQU          }
+        else if this.optional$assign       (skip_eat: true) { op = Op.ASSIGN       }
+        else if this.optional$plus_assign  (skip_eat: true) { op = Op.PLUS_ASSIGN  }
+        else if this.optional$minus_assign (skip_eat: true) { op = Op.MINUS_ASSIGN }
+        else if this.optional$mult_assign  (skip_eat: true) { op = Op.MULT_ASSIGN  }
+        else if this.optional$div_assign   (skip_eat: true) { op = Op.DIV_ASSIGN   }
+        else if this.optional$mod_assign   (skip_eat: true) { op = Op.MOD_ASSIGN   }
+        else if this.optional$plus         (skip_eat: true) { op = Op.PLUS         }
+        else if this.optional$minus        (skip_eat: true) { op = Op.MINUS        }
+        else if this.optional$leq          (skip_eat: true) { op = Op.LEQ          }
+        else if this.optional$geq          (skip_eat: true) { op = Op.GEQ          }
+        else if this.optional$lss          (skip_eat: true) { op = Op.LSS          }
+        else if this.optional$gtr          (skip_eat: true) { op = Op.GTR          }
+        else if this.optional$neq          (skip_eat: true) { op = Op.NEQ          }
+        else if this.optional$asterisk     (skip_eat: true) { op = Op.MULT         }
+        else if this.optional$fwd_slash    (skip_eat: true) { op = Op.DIV          }
+        else if this.optional$perc         (skip_eat: true) { op = Op.MOD          }
+        else if this.optional$kwd_and      (skip_eat: true) { op = Op.AND          }
+        else if this.optional$kwd_or       (skip_eat: true) { op = Op.OR           }
+        else if this.optional$kwd_bshl     (skip_eat: true) { op = Op.BSHL         }
+        else if this.optional$kwd_bshr     (skip_eat: true) { op = Op.BSHR         }
+        else if this.optional$kwd_band     (skip_eat: true) { op = Op.BAND         }
+        else if this.optional$kwd_bxor     (skip_eat: true) { op = Op.BXOR         }
+        else if this.optional$kwd_bor      (skip_eat: true) { op = Op.BOR          }
+
+        return op
+    }
+
+    proc look_ahead_unary_prefix_op(this) : Op {
+        op := Op.INVALID
+
+        if      this.optional$kwd_not    (skip_eat: true) { op = Op.NOT    }
+        else if this.optional$ampersand  (skip_eat: true) { op = Op.ADDR   }
+        else if this.optional$at         (skip_eat: true) { op = Op.DEREF  }
+        else if this.optional$kwd_new    (skip_eat: true) { op = Op.NEW    }   
+        else if this.optional$kwd_delete (skip_eat: true) { op = Op.DELETE }
+        else if this.optional$kwd_bneg   (skip_eat: true) { op = Op.BNEG   }
+        else if this.optional$kwd_sizeof (skip_eat: true) { op = Op.SIZEOF }
+
+        return op
+    }
+    
+    proc parse_leaf_expr(this) : astref {
+        direct := this.parse_directive()
+        if not direct.is_none()
+            return direct
+
+        literal_result : ast    = nothing
+        other_result   : astref  = nothing
+
+        # Only actually create a context if we parse something
+        # so that we avoid the cost of allocating a path string.
+        cxt_beg := this.cur_cxt.end
+
+        # Created nodes own s.
+        s := str()
+
+        do {
+            if this.optional$float_literal(s) {
+                literal_result = floatliteral.create(s)
+            } else if this.optional$integer_literal(s) {
+                literal_result = integerliteral.create(s)
+            } else if this.optional$string_literal(s) {
+                literal_result = stringliteral.create(s)
+            } else if this.optional$kwd_true() {
+                literal_result = boolliteral.create(true)
+            } else if this.optional$kwd_false() {
+                literal_result = boolliteral.create(false)
+            } else if this.optional$kwd_nothing() {
+                literal_result = nothingliteral.create()
+            } else if this.optional$char_literal(s) {
+                literal_result = charliteral.create(get_ch_val(s, cxt_beg, this.cur_cxt.file))
+                # charliteral doesn't need the string.
+                # So although technically, it owns s, we are just
+                # going to free it here.
+                s.free()
+            } else break
+
+            # @unsafe
+            # The only path where result isn't set breaks out
+            # of this block.
+            node := unsafe_baseref(literal_result)
+            node.set_flag(ast_flag.LEAF_EXPR)
+            cxt := context.from(this.cur_cxt)
+            cxt.beg = cxt_beg
+            cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+            node.cxt = cxt
+
+            return add(this.all_nodes, literal_result)
+        } while false
+
+        if (other_result = this.parse_qualified_identifier(allow_reserved: false)).is_none()
+        if (other_result = this.parse_paren_expr_or_tuple()                      ).is_none()
+        if (other_result = this.parse_initializer_list()                         ).is_none()
+        if (other_result = this.parse_len_expr()                                 ).is_none()
+        if (other_result = this.parse_slice_or_dyn_array_expr()                  ).is_none()
+        if (other_result = this.parse_proc_def()                                 ).is_none()
+        if (other_result = this.parse_extern()                                     ).is_none()
+        {
+            # We found nothing. Return nothing.
+        }
+
+        return other_result
+    }
+
+    proc parse_named_arg(this) : astref {
+        if not this.optional$identifier_then_colon(skip_eat: true)
+            return nothing
+
+        result := namedarg.create()
+        result.cxt = context.from(this.cur_cxt)
+        this.expect$identifier(result.name, "identifier")
+        this.eat(1) # ':'
+        
+        result.expr = this.parse_expr()
+
+        if result.expr.is_none() {
+            this.error_on_next_token("Expected expression in named argument.")
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc __inline__ parse_qualified_identifier(this) : astref
+        return this.parse_qualified_identifier(allow_reserved: false)
+
+    proc parse_qualified_identifier(this, allow_reserved : bool) : astref {
+        name := { string: }
+        cxt  := context.from(this.cur_cxt)
+
+        if allow_reserved {
+            if not this.optional$identifier_allow_reserved(name) { return nothing }
+        } else {
+            if not this.optional$identifier(name)                { return nothing }
+        }
+    
+        result := qidentifier.create()
+        if this.optional$double_colon() {
+            result.sym_mod = name
+            this.expect$identifier(result.sym_name, "identifier")
+        } else {
+            result.sym_name = name 
+        }
+
+        result.template_inst = this.parse_template_inst()
+
+        cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        result.cxt = cxt
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_template_inst(this) : astref {
+        if not this.optional$dollar(skip_eat: true)
+            return nothing
+
+        result    := templateinst.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(1) # '$'
+
+        if this.optional$l_paren() {
+            while not this.optional$r_paren() {
+                param := this.parse_declarator()
+                if param.is_none() {
+                    this.error_on_next_token("Invalid type parameter in template instantiation.")
+                }
+                result.type_params.push(param)
+
+                if not this.optional$comma() {
+                    this.expect$r_paren("')'")
+                    break
+                }
+            }
+        } else {
+            param := this.parse_declarator(base_only: true)
+            if param.is_none() {
+                this.error_on_next_token("Invalid type parameter in template instantiation.")
+            }
+            result.type_params.push(param)
+        }
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_paren_expr_or_tuple(this) : astref {
+        if not this.optional$l_paren(skip_eat: true)
+            return nothing
+
+        cxt := context.from(this.cur_cxt)
+        this.eat(1) # '('
+
+        result      : ast = nothing
+        expr_result := this.parse_expr()
+        if expr_result.is_none() {
+            if this.optional$r_paren() {
+                cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+                ui::error_builder.create()
+                    .with_message("Empty set of parentheses.")
+                    .add_location(cxt)
+                    .report()
+            }
+            this.error_on_next_token("Invalid expression.")
+        }
+        
+        # @unsafe below
+        # 'result' must be valid here. parse_expr() must have succeeded to get here.
+        # Might get overwritten with a new tupleliteral node, but that is valid too.
+        tup := false
+        if this.optional$comma() {
+            t := tupleliteral.create()
+            t.exprs.push(result)
+
+            while not this.optional$r_paren() {
+                e := this.parse_expr()
+
+                if e.is_none() {
+                    this.error_on_next_token("Expected tuple sub-expression.")
+                }
+                t.exprs.push(e)
+
+                if not this.optional$comma() { break }
+            }
+            result = t
+            tup    = true
+        } else {
+            unsafe_baseref(expr_result).set_flag(ast_flag.PAREN)
+        }
+            
+        this.expect$r_paren("')'")
+        cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        if tup {
+            unsafe_baseref(result).cxt = cxt
+            return add(this.all_nodes, result)
+        }
+        unsafe_baseref(expr_result).cxt = cxt
+        return expr_result
+    }
+       
+    proc parse_initializer_list(this) : astref {
+        if not this.optional$l_brace(skip_eat: true)
+            return nothing
+
+        result    := initializerlist.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(1) # '{'
+        
+        if this.optional$r_brace() {
+            result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+            ui::error_builder.create()
+                .with_message("Empty initializer list.")
+                .add_location(result.cxt)
+                .report()
+        }
+
+        result.type_decl = this.parse_declarator()
+
+        if result.type_decl.is_none() {
+            while not this.optional$r_brace() {
+                expr := this.parse_expr()
+                if expr.is_none() {
+                    this.error_on_next_token("Invalid expression in array initializer list.")
+                }
+                result.exprs.push(expr)
+                if not this.optional$comma() {
+                    this.expect$r_brace("'}'")
+                    break
+                }
+            }
+        } else {
+            this.expect$colon("':'")
+            name_str := { string: }
+            while not this.optional$r_brace() {
+                this.expect$dot("'.<field name>' for type field initialization")
+                this.expect$identifier(name_str, "type field name")
+                result.names.push(name_str)
+                this.expect$assign("'=' for type field initialization")
+                expr := this.parse_expr()
+                if expr.is_none() {
+                    this.error_on_next_token("Invalid expression in initializer list.") 
+                }
+                result.exprs.push(expr)
+                if not this.optional$comma() {
+                    this.expect$r_brace("'}'")
+                    break
+                }
+            }
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_slice_or_dyn_array_expr(this) : astref {
+        if not this.optional$l_bracket(skip_eat: true)
+            return nothing
+
+        result : ast = nothing
+
+        cxt := context.from(this.cur_cxt)
+
+        this.eat(1) # '['
+
+        if this.optional$r_bracket() {
+            cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+            ui::error_builder.create()
+                .with_message("Empty slice or dynamic array expression.")
+                .add_location(cxt)
+                .report()
+        } else if this.optional$ellipsis() {
+            d          := dynamicarrayliteral.create()
+            d.type_decl = this.parse_declarator()
+            if d.type_decl.is_none() {
+                this.error_builder_on_next_token()
+                    .with_message("Expected type declarator in dynamic array expression.")
+                    .add_note(    "dynamic array expression syntax: '[...type]'")
+                    .report()
+            }
+            result = d
+        } else {
+            s    := sliceliteral.create()
+            s.src = this.parse_expr()
+            if s.src.is_none() {
+                this.error_builder_on_next_token()
+                    .with_message("Invalid source in slice expression.")
+                    .add_note(    "slice syntax: '[ source, start_index:length ]'")
+                    .report()
+            }
+            this.expect$comma("','")
+            s.start = this.parse_expr()
+            if s.start.is_none() {
+                this.error_builder_on_next_token()
+                    .with_message("Invalid starting index in slice expression.")
+                    .add_note(    "slice syntax: '[ source, start_index:length ]'")
+                    .report()
+            }
+            this.expect$colon("':'")
+            s.length = this.parse_expr()
+            if s.length.is_none() {
+                this.error_builder_on_next_token()
+                    .with_message("Invalid length in slice expression.")
+                    .add_note(    "slice syntax: '[ source, start_index:length ]'")
+                    .report()
+            }
+            result = s
+        }
+
+        this.expect$r_bracket("']'")
+        cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        # @unsafe
+        # Only brach above that doesn't produce a valid 'result' will terminate.
+        unsafe_baseref(result).cxt = cxt
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_len_expr(this) : astref {
+        if not this.optional$pipe(skip_eat: true) {
+            return nothing
+        }
+
+        result    := lenexpr.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(1) # '|'
+
+        result.expr = this.parse_expr()
+        if result.expr.is_none() {
+            this.error_on_next_token("Expected expression in length expression.")
+        }
+
+        this.expect$pipe("'|'")
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_arg_list(this) : astref {
+        result    := arglist.create()
+        result.cxt = context.from(this.cur_cxt)
+
+        while not this.optional$r_paren(skip_eat: true) {
+            expr : astref = nothing
+
+            if (expr = this.parse_named_arg()).is_none()
+            if (expr = this.parse_expr()     ).is_none() {
+                return nothing
+            }
+
+            result.exprs.push(expr)
+
+            if not this.optional$comma()    { break }
+        }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        return add(this.all_nodes, result)
+    }
+
+    proc __inline__ parse_declarator(this) : astref
+        return this.parse_declarator(base_only: false)
+
+    proc parse_declarator(this, base_only : bool) : astref {
+        direct := this.parse_directive()
+        if not direct.is_none()
+            return direct
+
+        result : astref = nothing
+        cxt := context.from(this.cur_cxt)
+
+        if not base_only and this.optional$lss(skip_eat: true) {
+            result = this.parse_proc_declarator()
+        } else if not base_only and this.optional$l_paren(skip_eat: true) {
+            result = this.parse_tuple_or_sum_declarator()
+        } else if ident : ast ref = this.parse_qualified_identifier() {
+            d           := declarator.create()
+            d.cxt        = cxt
+            d.identifier = ident
+
+            result       = add(this.all_nodes, d)
+        } else {
+            return nothing
+        }
+
+        if not base_only {
+            while true {
+                if this.optional$l_bracket() {
+                    if this.optional$ellipsis() {
+                        d          := dynamicarraydeclarator.create()
+                        d.elem_decl = result
+                        result      = add(this.all_nodes, d)
+                    } else if this.optional$r_bracket(skip_eat: true) {
+                        s          := slicedeclarator.create()
+                        s.elem_decl = result
+                        result      = add(this.all_nodes, s)
+                    } else {
+                        a          := arraydeclarator.create()
+                        a.elem_decl = result
+                        a.expr      = this.parse_expr()
+                        if a.expr.is_none() {
+                            this.error_builder_on_next_token()
+                                .with_message("Expected static array length expression.")
+                                .add_note("use '[]' to declare a slice")
+                                .add_note("or '[...]' to declare a dynamic array")
+                                .report()
+                        }
+                        result = add(this.all_nodes, a)
+                    }
+
+                    this.expect$r_bracket("']'")
+                } else if this.optional$asterisk() {
+                    p          := pointerdeclarator.create()
+                    p.elem_decl = result
+                    result      = add(this.all_nodes, p)
+                } else if this.optional$kwd_ref() {
+                    r          := refdeclarator.create()
+                    r.elem_decl = result
+                    result      = add(this.all_nodes, r)
+                } else {
+                    break
+                }
+
+                # @unsafe
+                # The only path in the if/else chain before this loop that does not
+                # produce a valid result node returns from the procedure.
+                unsafe_baseref(result).cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+            }
+        }
+
+        return result
+    }
+
+    proc parse_proc_declarator(this) : astref {
+        if not this.optional$lss(skip_eat: true)
+            return nothing
+        
+        result   := procdeclarator.create()
+        c_vararg := false
+
+        result.cxt = context.from(this.cur_cxt)
+
+        this.eat(1) # '<'
+
+        this.expect$l_paren("'('")
+        while not this.optional$r_paren() {
+            if this.optional$ellipsis() {
+                c_vararg = true
+                result.set_flag(ast_flag.C_VARARG)
+            } else {
+                if c_vararg {
+                    this.error_on_next_token("C vararg ('...') denotation must be the last argument.")
+                }
+
+                param_decl := this.parse_declarator()
+                
+                if param_decl.is_none() {
+                    this.error_on_next_token("Expected type declarator in argument list for procedure type declarator.")
+                }
+
+                result.param_decls.push(param_decl)
+            }
+            if not this.optional$comma() {
+                this.expect$r_paren("')'")
+                break
+            }
+        }
+
+        if this.optional$colon() {
+            result.ret_decl = this.parse_declarator()
+            if result.ret_decl.is_none() {
+                this.error_on_next_token("Expected return type declarator for prodecure type declarator.")
+            }
+        } else {
+            void_decl        := new_void_declarator(this.all_nodes)
+            void_decl.cxt     = this.just_cleaned_cxt
+            void_decl.cxt.end = void_decl.cxt.beg
+            result.ret_decl   = add(this.all_nodes, void_decl)
+        }
+
+        this.expect$gtr("'>'")
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        return add(this.all_nodes, result)
+    }
+
+    proc parse_tuple_or_sum_declarator(this) : astref {
+        if not this.optional$l_paren(skip_eat: true)
+            return nothing
+
+        result : ast = nothing
+
+        tuple_or_sum_kind      := 0 # 0 = unknown, 1 = tuple, 2 = sum
+        n_decls                := 0
+
+        cxt := context.from(this.cur_cxt)
+
+        this.eat(1) # '('
+
+        first_decl := this.parse_declarator()
+        if first_decl.is_none() {
+            this.error_on_next_token("Expected type declarator as sub type in tuple or sum declarator.")
+        }
+        n_decls += 1
+
+        if this.optional$comma() {
+            tuple_or_sum_kind = 1
+            result = tupledeclarator.create()
+        } else if this.optional$pipe() {
+            tuple_or_sum_kind = 2
+            result = sumdeclarator.create()
+        } else {
+            this.expect$r_paren("')'") # just error here
+        }
+
+        while not this.optional$r_paren() {
+            sub_decl := this.parse_declarator()
+            if sub_decl.is_none() {
+                if tuple_or_sum_kind == 1 {
+                    this.error_on_next_token("Expected type declarator as sub type in tuple declarator.")
+                } else {
+                    this.error_on_next_token("Expected type declarator as sub type in sum declarator.")
+                }
+            }
+
+            n_decls += 1
+
+            if tuple_or_sum_kind == 1 {
+                if not this.optional$comma() {
+                    this.expect$r_paren("')'")
+                    break
+                } 
+            } else {
+                if not this.optional$pipe() {
+                    this.expect$r_paren("')'")
+                    break
+                } 
+            }
+        }
+
+        cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        if n_decls < 2 {
+            eb := ui::error_builder.create()
+            if tuple_or_sum_kind == 1
+                eb = eb.with_message("Tuple types must have at least 2 sub types.")
+            else  
+                eb = eb.with_message("Sum types must have at least 2 sub types.")
+            
+            eb.add_location(cxt)
+              .report()
+        }
+        
+        # @unsafe
+        # Either a sum or tuple declarator must be correctly formed by this point.
+        unsafe_baseref(result).cxt = cxt
+
+        return result
+    }
+
+    proc consume_comment(this) {
+        # consume '#'
+        this.buff.advance(1)
+        this.cur_cxt.end.ch += 1
+
+        # consume rest
+        while |this.buff| != 0
+        and   this.buff[0] != '\n' {
+            this.cur_cxt.end.ch += 1
+            this.buff.advance(1)
+        }
+    }
+
+    proc clean(this) {
+        if |this.buff| == 0
+            return
+
+        save_cur_end  := this.cur_cxt.end
+        altered       := false
+        seen_first_nl := false
+
+        while |this.buff| != 0 {
+            c := this.buff[0]
+            if is_space(c) {
+                if c == '\n' {
+                    this.n_lines        += 1
+                    this.cur_cxt.end.ln += 1
+                    this.cur_cxt.end.ch  = 1
+
+                    if seen_first_nl {
+                        this.n_blank_lines += 1
+                    } else {
+                        seen_first_nl = true
+                    }
+                } else { 
+                    this.cur_cxt.end.ch += 1
+                }
+                this.buff.advance(1)
+            } else if c == '#' {
+                this.consume_comment()
+
+                # if the last line is a comment, we have another blank
+                if |this.buff| == 0
+                    this.n_blank_lines += 1
+            } else break
+
+            altered = true
+        }
+
+        if altered {
+            this.just_cleaned_cxt.beg = save_cur_end
+            this.just_cleaned_cxt.finish(this.cur_cxt)
+        }
+    }
+
+    proc eat(this, n : u64)
+        this.eat(n, false)
+    proc eat(this, s : char*)
+        this.eat(cstrlen(s), false)
+    proc eat(this, n : u64, skip_clean : bool) {
+        this.buff.advance(n)
+        this.cur_cxt.end.ch += n
+        this.cur_cxt.beg = this.cur_cxt.end
+        if not skip_clean
+            this.clean()
+    }
+    proc eat_string_with_newlines(this, s : string ref, skip_clean : bool) {
+        # @bad @bug 17 @bug 21
+        s_slice := s.as_slice()
+
+        foreach ch in s_slice {
+            if ch == '\n' {
+                this.n_lines        += 1
+                this.cur_cxt.end.ln += 1
+                this.cur_cxt.end.ch  = 1
+            } else {
+                this.cur_cxt.end.ch += 1
+            }
+        }
+        this.buff.advance(s.len())
+        this.cur_cxt.beg = this.cur_cxt.end
+
+        if not skip_clean
+            this.clean()
+    }
+   
+    proc expect$parser_T(this, s : char*) {
+        this.expect$parser_T(nothing, s)
+    }
+    proc expect$parser_T(this, dst : (string ref | none), s : char*) {
+        if not this.optional$parser_T(dst, skip_eat: false, skip_clean: false) {
+            s' := str("Expected ")
+            s'.append(s)
+            s'.append('.')
+            this.error_on_next_token(s'.c_str())
+            s'.free()
+        }
+    }
+
+    proc optional$parser_T(this) : bool {
+        return this.optional$parser_T(skip_eat: false, skip_clean: false)
+    }
+    proc optional$parser_T(this, skip_eat : bool) : bool {
+        return this.optional$parser_T(nothing, skip_eat, skip_clean: false)
+    }
+    proc optional$parser_T(this, skip_eat : bool, skip_clean : bool) : bool {
+        return this.optional$parser_T(nothing, skip_eat, skip_clean)
+    }
+    proc optional$parser_T(this, dst : string ref) : bool {
+        return this.optional$parser_T(dst, skip_eat: false, skip_clean: false)
+    }
+    proc optional$parser_T(this, dst : (string ref | none), skip_eat : bool, skip_clean : bool) : bool {
+        match_len : int
+
+        \static_if{ \same_type{ parser_T string_literal }
+            str_lit_str := { string: }
+            match_len    = parser_T.parse(this.buff, str_lit_str)
+        }
+        \static_if{ not \same_type{ parser_T string_literal }
+            match_len = parser_T.parse(this.buff, dst)
+        }
+
+        if match_len {
+            if not skip_eat {
+                \static_if{ \same_type{ parser_T string_literal }
+                    this.eat_string_with_newlines(str_lit_str, skip_clean)
+                }
+                \static_if{ not \same_type{ parser_T string_literal }
+                    this.eat(match_len, skip_clean)
+                }
+            } else if not skip_clean {
+                this.clean()
+            }
+
+            \static_if{ \same_type{ parser_T end_of_line }
+                # newlines won't be taken by clean() if they are specifically
+                # looked for but the cur_cxt still needs to be updated
+                this.cur_cxt.end.ln += 1
+                this.cur_cxt.end.ch  = 1
+            }
+           
+            \static_if{ \same_type{ parser_T string_literal }
+                if dst' : string ref = dst
+                    dst' = str_lit_str
+                else
+                    str_lit_str.free()
+            }
+
+            return true
+        }
+
+        return false
+    }
+
+    proc remove_trailing_space(this) {
+        p := 1u64
+        while good_idx(this.buff, |this.buff| - 1)
+        and   is_space(this.buff, |this.buff| - 1) {
+            if this.buff[|this.buff| - 1] == '\n'
+                this.n_lines += 1
+            this.buff.shrink(1)
+        }
+    }
+
+    proc next_token_cxt(this) : context {
+        c := context.from(this.cur_cxt)
+        this.optional$generic(skip_eat: false, skip_clean: true)
+
+        c.finish(this.cur_cxt)
+        return c
+    }
+}
+
+type async_parser extends parser {
+    proc init(this, f : file, kind : parserkind) {
+        parser.init(this, f, kind)
+    }
+    
+    proc create(fe : frontend ref, pool : threadpool ref, f : file, kind : parserkind) : async_parser {
+        r := { async_parser: .fe = fe, .pool = pool }
+        r.init(f, kind)
+
+        return r
+    }
+}
+
+proc async_parser_wrapper(arg : void*) {
+    p : async_parser ref = @(arg as async_parser*)
+
+    p.go()
+}
+
+proc __inline__ string_from_buff(buff : char[], n : u64) : string {
+    return str(buff.data(), n)
+}
+
+get_ch_val_escape_map : char[256]
+proc init_get_ch_val_escape_map() {
+    # @libc
+    memset(get_ch_val_escape_map, -1, 256)
+
+    get_ch_val_escape_map['0'  as u8] = '\0'
+    get_ch_val_escape_map['n'  as u8] = '\n'
+    get_ch_val_escape_map['r'  as u8] = '\r'
+    get_ch_val_escape_map['t'  as u8] = '\t'
+    get_ch_val_escape_map['\\' as u8] = '\\'
+    get_ch_val_escape_map['e'  as u8] = '\e'
+    get_ch_val_escape_map['\'' as u8] = '\''
+}
+
+proc get_ch_val(s : string ref, beg : location, path : (string ref | none) ref) : char {
+    msg      := { string: }
+    c        := context.create()
+    c.file    = path
+    c.beg     = beg
+    c.end     = c.beg
+    c.end.ch += s.len()
+
+    if s.len() == 3 {
+        return s[1]
+    } else if s.len() == 4 and s[1] == '\\' {
+        ch := s[2]
+
+        r  := get_ch_val_escape_map[ch as u8]
+
+        if r != (-1 as char)
+            return r
+        
+        msg = concat(str("Unknown escape code '"), str(ch), str("'."))
+        c.beg.ch += 2
+        c.end.ch -= 2
+    } else {
+        msg = concat(str("Unknown character sequence "), s.copy(), str("."))
+    }
+
+
+    ui::error_builder.create()
+        .with_message(msg.c_str())
+        .add_location(c)
+        .report()
+
+    return -1 as char
+}

@@ -1,0 +1,1256 @@
+# token_parsers.bjou
+
+module token_parsers
+
+const MIN_WORD_LENGTH := 2 
+const MAX_WORD_LENGTH := 13
+
+kwds := { 
+    "type",
+    "abstract",
+    "extends",
+    "enum",
+    "print",
+    "delete",
+    "module",
+    "import",
+    "include",
+    "using",
+    "This",
+    "ref",
+    "return",
+    "if",
+    "else",
+    "while",
+    "do",
+    "for",
+    "foreach",
+    "in",
+    "break",
+    "continue",
+    "true",
+    "false",
+    "nothing",
+    "as",
+    "sizeof",
+    "not",
+    "new",
+    "proc",
+    "__no_mangle__",
+    "__inline__",
+    "extern",
+    "some",
+    "bneg",
+    "and",
+    "or",
+    "bshl",
+    "bshr",
+    "band",
+    "bxor",
+    "bor"
+}
+
+kwd_lens := { 
+    4, #"type",
+    8, #"abstract",
+    7, #"extends",
+    4, #"enum",
+    5, #"print",
+    6, #"delete",
+    6, #"module",
+    6, #"import",
+    7, #"include",
+    5, #"using",
+    4, #"This",
+    3, #"ref",
+    6, #"return",
+    2, #"if",
+    4, #"else",
+    5, #"while",
+    2, #"do",
+    3, #"for",
+    7, #"foreach",
+    2, #"in",
+    5, #"break",
+    8, #"continue",
+    4, #"true",
+    5, #"false",
+    7, #"nothing",
+    2, #"as",
+    6, #"sizeof",
+    3, #"not",
+    3, #"new",
+    4, #"proc",
+    13,#"__no_mangle__",
+    10,#"__inline__",
+    6, #"extern",
+    4, #"some",
+    4, #"bneg",
+    3, #"and",
+    2, #"or",
+    4, #"bshl",
+    4, #"bshr",
+    4, #"band",
+    4, #"bxor",
+    3, #"bor"
+}
+
+proc is_kwd(str : char*, len : u64) : char* {
+    if len >= MIN_WORD_LENGTH and len <= MAX_WORD_LENGTH {
+        for i := 0; i < |kwds|; i += 1 {
+            kwd := kwds[i]
+
+            if  @str == @kwd
+            and len  == kwd_lens[i]
+            and cstrncmp(str + 1, kwd + 1, len - 1) == 0 {
+                return kwd
+            }
+        }
+    }
+
+    return NULL as char*
+}
+
+
+proc text_match_parser(text : char*, buff : char[] ref, dst : (string ref | none)) : int {
+    p  := 0u64
+    ch := 0 as char
+    while (ch = @text)
+    and   good_idx(buff, p) {
+        if buff[p] != ch {
+            return 0
+        }
+        text += 1
+        p    += 1
+    }
+
+    if good_idx(buff, p) {
+        if is_aZ09(buff, p) or buff[p] == '_'
+            return 0
+    }
+
+    if dst' : string ref = dst
+        dst' = string_from_buff(buff, p)
+    return p
+}
+
+proc single_char_matcher(ch : char, buff : char[] ref, dst : (string ref | none)) : int {
+    if good_idx(buff, 0) and buff[0] == ch {
+        if dst' : string ref = dst
+            dst' = str(ch)
+        return 1
+    }
+    return 0
+}
+
+# @bad @bug 9 @bug 13
+# type parse_table_t = <(char[] ref, string ref) : bool>
+# fails to compile
+# parse_table : <(char[] ref, (string ref | none)) : int>[Tok.N_TOK]
+
+# proc register_parser$T() {
+#     parse_table[T.table_idx] = T.parse
+# }
+
+type generic {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p := 0u64
+        if  good_idx(buff, p)
+        and not is_aZ09(buff, p)
+        and buff[p] != '_' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 1)
+            return 1
+        }
+        while good_idx(buff, p)
+        and   (is_aZ09(buff, p) or buff[p] == '_') {
+            p += 1
+        }
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+        return p
+    }
+}
+
+type identifier_allow_reserved {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        has_non_underscore := 0u32
+        p                  := 0u64
+
+        if not good_idx(buff, 0)
+        or not (is_aZ(buff, 0) or buff[p] == '_')
+            return 0
+
+        has_non_underscore = has_non_underscore bor ((buff[0] != '_') as u32)
+
+        p = 1
+        while good_idx(buff, p)
+        and   (is_aZ09(buff, p) or buff[p] == '_') {
+            has_non_underscore = has_non_underscore bor ((buff[p] != '_') as u32)
+            p += 1
+        }
+        
+        has_prime := false
+        while good_idx(buff, p)
+        and   buff[p] == '\'' {
+            has_prime = true
+            p += 1
+        }
+
+        if not has_non_underscore
+            return 0
+        
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+        
+        return p
+    }
+}
+
+type identifier {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        has_non_underscore := 0u32
+        p                  := 0u64
+
+        if not good_idx(buff, 0)
+        or not (is_aZ(buff, 0) or buff[p] == '_')
+            return 0
+
+        has_non_underscore = has_non_underscore bor ((buff[0] != '_') as u32)
+
+        p = 1
+        while good_idx(buff, p)
+        and   (is_aZ09(buff, p) or buff[p] == '_') {
+            has_non_underscore = has_non_underscore bor ((buff[p] != '_') as u32)
+            p += 1
+        }
+        
+        has_prime := false
+        while good_idx(buff, p)
+        and   buff[p] == '\'' {
+            has_prime = true
+            p += 1
+        }
+
+        if not has_non_underscore
+            return 0
+        
+        # keywords never have primes, so don't even check
+        if  not has_prime
+        and not is_kwd(buff.data(), p).isnull()
+        # or is_builtin_typename(buff.data(), p)
+            return 0
+
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+        
+        return p
+    }
+}
+
+type identifier_then_colon {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p := identifier.parse(buff, dst: nothing) 
+
+        if p == 0    { return 0 }
+
+        while good_idx(buff, p)
+        and   is_space(buff, p)
+            p += 1
+
+        if not good_idx(buff, p)
+        or buff[p] != ':'
+            return 0
+        p += 1
+
+        # watch out for '::'
+        if not good_idx(buff, p)
+        or buff[p] == ':'
+            return 0
+   
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+
+        return p
+    }
+}
+
+type dot {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('.', buff, dst)
+    }
+}
+
+type asterisk {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('*', buff, dst)
+    }
+}
+
+type fwd_slash {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('/', buff, dst)
+    }
+}
+
+type back_slash {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('\\', buff, dst)
+    }
+}
+
+type perc {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('%', buff, dst)
+    }
+}
+
+type plus {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('+', buff, dst)
+    }
+}
+
+type minus {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('-', buff, dst)
+    }
+}
+    
+type assign {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('=', buff, dst)
+    }
+}
+    
+type mult_assign {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '*'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+    
+type div_assign {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '/'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+    
+type mod_assign {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '%'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+    
+type plus_assign {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '+'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+    
+type minus_assign {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '-'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type hash {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('#', buff, dst)
+    }
+}
+
+type dollar {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('$', buff, dst)
+    }
+}
+
+type pipe {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('|', buff, dst)
+    }
+}
+
+type comma {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher(',', buff, dst)
+    }
+}
+
+type ampersand {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('&', buff, dst)
+    }
+}
+
+type at {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('@', buff, dst)
+    }
+}
+
+type ellipsis {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and good_idx(buff, 2)
+        and buff[0] == '.'
+        and buff[1] == '.'
+        and buff[2] == '.' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 3)
+            return 3
+        }
+
+        return 0
+    }
+}
+
+type colon {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher(':', buff, dst) 
+    }
+}
+
+type double_colon {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == ':'
+        and buff[1] == ':' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type semicolon {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher(';', buff, dst) 
+    }
+}
+
+type l_paren {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('(', buff, dst)
+    }
+}
+
+type r_paren {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher(')', buff, dst)
+    }
+}
+
+type l_bracket {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('[', buff, dst)
+    }
+}
+
+type r_bracket {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher(']', buff, dst)
+    }
+}
+
+type l_brace {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('{', buff, dst)
+    }
+}
+
+type r_brace {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('}', buff, dst)
+    }
+}
+
+type lss {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('<', buff, dst)
+    }
+}
+
+type leq {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '<'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type gtr {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return single_char_matcher('>', buff, dst)
+    }
+}
+
+type geq {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '>'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type equ {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '='
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type neq {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == '!'
+        and buff[1] == '=' {
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type end_of_line {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p := 0u64
+
+        while good_idx(buff, p)
+        and   buff[p] != '\n'
+        and   is_space(buff, p)
+            p += 1
+
+        if not good_idx(buff, p)
+        or buff[p] != '\n'
+            return 0
+
+        p += 1
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+        return p
+    }
+}
+
+type kwd_true {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("true", buff, dst)
+    }
+}
+
+type kwd_false {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("false", buff, dst)
+    }
+}
+
+type kwd_nothing {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("nothing", buff, dst)
+    }
+}
+
+type kwd_not {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("not", buff, dst)
+    }
+}
+
+type kwd_bneg {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("bneg", buff, dst)
+    }
+}
+
+type kwd_bshl {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("bshl", buff, dst)
+    }
+}
+
+type kwd_bshr {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("bshr", buff, dst)
+    }
+}
+
+type kwd_band {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("band", buff, dst)
+    }
+}
+
+type kwd_bxor {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("bxor", buff, dst)
+    }
+}
+
+type kwd_bor {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("bor", buff, dst)
+    }
+}
+
+type kwd_and {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("and", buff, dst)
+    }
+}
+
+type kwd_or {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("or", buff, dst)
+    }
+}
+
+type kwd_new {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("new", buff, dst)
+    }
+}
+
+type kwd_delete {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("delete", buff, dst)
+    }
+}
+
+type kwd_sizeof {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("sizeof", buff, dst)
+    }
+}
+
+type kwd_as {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == 'a'
+        and buff[1] == 's' {
+            if good_idx(buff, 2) {
+                if is_aZ09(buff, 2) or buff[2] == '_'
+                    return 0
+            }
+
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type kwd_print {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("print", buff, dst)
+    }
+}
+
+type kwd_return {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("return", buff, dst)
+    }
+}
+
+type kwd_if {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == 'i'
+        and buff[1] == 'f' {
+            if good_idx(buff, 2) {
+                if is_aZ09(buff, 2) or buff[2] == '_'
+                    return 0
+            }
+
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type kwd_else {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("else", buff, dst)
+    }
+}
+
+type kwd_for {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("for", buff, dst)
+    }
+}
+
+type kwd_foreach {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("foreach", buff, dst)
+    }
+}
+
+type kwd_while {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("while", buff, dst)
+    }
+}
+
+type kwd_do {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == 'd'
+        and buff[1] == 'o' {
+            if good_idx(buff, 2) {
+                if is_aZ09(buff, 2) or buff[2] == '_'
+                    return 0
+            }
+
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type kwd_break {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("break", buff, dst)
+    }
+}
+
+type kwd_continue {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("continue", buff, dst)
+    }
+}
+
+type kwd_in {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        if  good_idx(buff, 0)
+        and good_idx(buff, 1)
+        and buff[0] == 'i'
+        and buff[1] == 'n' {
+            if good_idx(buff, 2) {
+                if is_aZ09(buff, 2) or buff[2] == '_'
+                    return 0
+            }
+
+            if dst' : string ref = dst
+                dst' = string_from_buff(buff, 2)
+            return 2
+        }
+
+        return 0
+    }
+}
+
+type kwd_module {
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("module", buff, dst)
+    }
+}
+
+type kwd_import {
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("import", buff, dst)
+    }
+}
+
+type kwd_using {
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("using", buff, dst)
+    }
+}
+
+type kwd_include {
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("include", buff, dst)
+    }
+}
+
+type kwd_ref {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("ref", buff, dst)
+    }
+}
+
+type kwd_this {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("this", buff, dst)
+    }
+}
+
+type kwd_This {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("This", buff, dst)
+    }
+}
+
+type kwd_const {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("const", buff, dst)
+    }
+}
+
+type kwd_type {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("type", buff, dst)
+    }
+}
+
+type kwd_extends {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("extends", buff, dst)
+    }
+}
+
+type kwd_abstract {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("abstract", buff, dst)
+    }
+}
+
+type kwd_enum {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("enum", buff, dst)
+    }
+}
+
+type kwd_proc {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("proc", buff, dst)
+    }
+}
+
+type kwd_extern {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("extern", buff, dst)
+    }
+}
+
+type kwd___no_mangle__ {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("__no_mangle__", buff, dst)
+    }
+}
+
+type kwd___inline__ {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        return text_match_parser("__inline__", buff, dst)
+    }
+}
+
+type string_literal {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p := 0u64
+
+        if not good_idx(buff, 0)
+        or buff[0] != '"'
+            return 0
+
+        p = 1
+
+        while true {
+            if not good_idx(buff, p)
+                return 0
+
+            if buff[p] == '"' {
+                p += 1
+                break
+            } else if buff[p] == '\\' {
+                p += 1
+            }
+
+            if p < |buff| {
+                p += 1
+            } else {
+                return 0
+            }
+        }
+       
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+        return p
+    }
+}
+
+type char_literal {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p := 0u64
+
+        if not good_idx(buff, 0)
+        or buff[0] != '\''
+            return 0
+
+        p = 1
+
+        if not good_idx(buff, p)
+            return 0
+            
+        if buff[p] == '\\'
+            p += 1
+    
+        if not good_idx(buff, p)
+            return 0
+
+        p += 1
+       
+        if not good_idx(buff, p)
+        or buff[p] != '\''
+            return 0
+       
+        p += 1
+
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+
+        return p
+    }
+}
+
+type integer_literal {
+    
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p := 0u64
+
+        if not good_idx(buff, 0)
+            return 0
+
+        if  buff[0] == '0'
+        and good_idx(buff, 1) and buff[1] == 'x' {
+            p += 2
+
+            if  not good_idx(buff, p)
+            or (    not is_09(buff, p)
+                and not in_ch_range(buff, p, 'a', 'f')
+                and not in_ch_range(buff, p, 'A', 'F')) {
+
+                return 0
+            }
+            
+            while good_idx(buff, p)
+            and (  is_09(buff, p)
+                or in_ch_range(buff, p, 'a', 'f')
+                or in_ch_range(buff, p, 'A', 'F')) {
+
+                p += 1
+            }
+        } else {
+            if buff[0] == '-' {
+                p += 1
+                if not good_idx(buff, p)
+                or not is_09(buff, p)
+                    return 0
+                p += 1
+            }
+            while good_idx(buff, p)
+            and   is_09(buff, p)
+                p += 1
+        }
+
+        if p == 0
+            return 0
+      
+        if  good_idx(buff, p)
+        and (buff[p] == 'u' or buff[p] == 'i') {
+            p += 1
+            if not good_idx(buff, p)
+                return 0
+            if        buff[p] == '8' {
+                # all good
+            } else if buff[p] == '1' {
+                p += 1
+                if not good_idx(buff, p)
+                    return 0
+                if buff[p] != '6'
+                    return 0
+            } else if buff[p] == '3' {
+                p += 1
+                if not good_idx(buff, p)
+                    return 0
+                if buff[p] != '2'
+                    return 0
+            } else if buff[p] == '6' {
+                p += 1
+                if not good_idx(buff, p)
+                    return 0
+                if buff[p] != '4'
+                    return 0
+            }
+            p += 1
+        }
+
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+        return p
+    }
+}
+
+type float_literal {
+
+    proc parse(buff : char[] ref, dst : (string ref | none)) : int {
+        p               := 0u64
+        leading_digits  := 0u64
+        trailing_digits := 0u64
+        e_digits        := 0u64
+
+        if not good_idx(buff, 0)
+            return 0
+
+        if buff[0] == '-'
+            p += 1
+
+        while good_idx(buff, p)
+        and   is_09(buff, p) {
+            p              += 1
+            leading_digits += 1
+        }
+        if leading_digits == 0
+        or not good_idx(buff, p)
+        or buff[p] != '.'
+            return 0
+       
+        p += 1
+        
+        while good_idx(buff, p)
+        and   is_09(buff, p) {
+            p               += 1
+            trailing_digits += 1
+        }
+        if trailing_digits == 0
+            return 0
+
+        if  good_idx(buff, p)
+        and (buff[p] == 'E' or buff[p] == 'e') {
+            p += 1
+
+            if not good_idx(buff, p)
+                return 0
+
+            if buff[p] == '+' or buff[p] == '-'
+                p += 1
+
+            while good_idx(buff, p)
+            and   is_09(buff, p) {
+                p        += 1
+                e_digits += 1
+            }
+            if e_digits == 0
+                return 0
+        }
+
+        if dst' : string ref = dst
+            dst' = string_from_buff(buff, p)
+
+        return p
+    }
+}
+
+proc init_parse_table() {
+}
+
+
+proc __inline__ good_idx(buff : char[], p : u64) : bool
+    return  p < |buff|
+
+proc __inline__ in_ch_range(buff : char[], p : u64, c1 : char, c2 : char) : bool {
+    c := buff[p]
+    return c >= c1 and c <= c2
+}
+
+proc __inline__ is_AZ(buff : char[], p : u64) : bool {
+    c := buff[p] as u32
+    return (c - ('A' as u32)) < 26u32
+}
+
+proc __inline__ is_az(buff : char[], p : u64) : bool {
+    c := buff[p] as u32
+    return (c - ('a' as u32)) < 26u32
+}
+
+proc __inline__ is_aZ(buff : char[], p : u64) : bool {
+    c := buff[p] as u32
+    return ((c bor 32u32) - ('a' as u32)) < 26u32
+}
+
+proc __inline__ is_09(buff : char[], p : u64) : bool {
+    c := buff[p] as u32
+    return (c - ('0' as u32)) < 10u32
+}
+
+proc __inline__ is_aZ09(buff : char[], p : u64) : bool {
+    c := buff[p] as u32
+    return  ((((c bor 32u32) - ('a' as u32)) < 26u32) as u32) bor
+            (((c - ('0' as u32)) < 10u32) as u32)
+}
+
+proc __inline__ is_space(c : u32) : bool {
+    return  ((c == ' ') as u32) bor
+            (((c - ('\t' as u32)) < 5u32) as u32)
+}
+proc __inline__ is_space(buff : char[], p : u64) : bool {
+    c := buff[p] as u32
+    return  ((c == ' ') as u32) bor
+            (((c - ('\t' as u32)) < 5u32) as u32)
+}

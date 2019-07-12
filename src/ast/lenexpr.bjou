@@ -1,0 +1,16 @@
+# lenexpr.bjou
+
+type lenexpr extends exprbase {
+    expr : astref
+
+
+    proc init(this) {
+        exprbase.init(this)
+    }
+
+    proc create() : lenexpr {
+        r := { lenexpr:  }
+        r.init()
+        return r
+    }
+}

@@ -1,0 +1,7 @@
+# expr.bjou
+
+abstract type exprbase extends typed {
+    proc init(this) {
+        astbase.init(this)
+    }
+}

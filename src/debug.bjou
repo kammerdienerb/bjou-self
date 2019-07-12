@@ -1,0 +1,13 @@
+# debug.bjou
+#
+# debugging utilites
+
+module bjou_debug
+
+using import "defs.bjou"
+
+proc __inline__ debug_assert(cond : bool, msg : char*) {
+    \static_if{ BJOU_DEBUG
+        if not cond    \die{ msg }
+    }
+}

@@ -1,0 +1,11 @@
+type minusassignexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : minusassignexpr {
+        r := { minusassignexpr: }
+        r.init()
+        return r
+    }
+}

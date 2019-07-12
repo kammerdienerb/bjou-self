@@ -1,0 +1,17 @@
+# enumdef.bjou
+
+type enumdef extends declaration {
+    identifiers : string[...]
+
+
+    proc init(this) {
+        declaration.init(this)
+        this.identifiers = [...string]
+    }
+
+    proc create() : enumdef {
+        r := { enumdef: }
+        r.init()
+        return r
+    }
+}

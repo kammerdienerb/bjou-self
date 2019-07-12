@@ -1,0 +1,149 @@
+# declarator.bjou
+
+type declaratorbase extends typed {
+    proc init(this) {
+        typed.init(this)
+    }
+}
+
+type declarator extends declaratorbase {
+    identifier    : astref
+    template_inst : astref
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+    }
+
+    proc create() : declarator {
+        r := { declarator: }
+        r.init()
+        return r
+    }
+}
+
+type arraydeclarator extends declaratorbase {
+    elem_decl : astref
+    expr      : astref
+    size      : int
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+    }
+
+    proc create() : arraydeclarator {
+        r := { arraydeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type slicedeclarator extends declaratorbase {
+    elem_decl : astref
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+    }
+
+    proc create() : slicedeclarator {
+        r := { slicedeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type dynamicarraydeclarator extends declaratorbase {
+    elem_decl : astref
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+    }
+
+    proc create() : dynamicarraydeclarator {
+        r := { dynamicarraydeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type pointerdeclarator extends declaratorbase {
+    elem_decl : astref
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+    }
+
+    proc create() : pointerdeclarator {
+        r := { pointerdeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type refdeclarator extends declaratorbase {
+    elem_decl : astref
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+    }
+
+    proc create() : refdeclarator {
+        r := { refdeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type sumdeclarator extends declaratorbase {
+    option_decls : astref[...]
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+        this.option_decls = [...astref]
+    }
+
+    proc create() : sumdeclarator {
+        r := { sumdeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type tupledeclarator extends declaratorbase {
+    sub_decls : astref[...]
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+        this.sub_decls = [...astref]
+    }
+
+    proc create() : tupledeclarator {
+        r := { tupledeclarator: }
+        r.init()
+        return r
+    }
+}
+
+type procdeclarator extends declaratorbase {
+    param_decls : astref[...]
+    ret_decl    : astref
+
+
+    proc init(this) {
+        declaratorbase.init(this)
+        this.param_decls = [...astref]
+    }
+
+    proc create() : procdeclarator {
+        r := { procdeclarator: }
+        r.init()
+        return r
+    }
+}

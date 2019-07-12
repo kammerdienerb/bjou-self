@@ -1,0 +1,17 @@
+# constantdecl.bjou
+
+type constantdecl extends declaration {
+    type_decl : astref
+    expr      : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : constantdecl {
+        r := { constantdecl: }
+        r.init()
+        return r
+    }
+}

@@ -1,0 +1,20 @@
+# initializerlist.bjou
+
+type initializerlist extends exprbase {
+    names     : string[...]
+    type_decl : astref
+    exprs     : astref[...]
+
+
+    proc init(this) {
+        exprbase.init(this)
+        this.names = [...string]
+        this.exprs = [...astref]
+    }
+
+    proc create() : initializerlist {
+        r := { initializerlist:  }
+        r.init()
+        return r
+    }
+}

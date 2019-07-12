@@ -1,0 +1,261 @@
+# frontend.bjou
+
+module frontend
+
+using import "measure_time.bjou"
+using import "thread.bjou"
+using import "threadpool.bjou"
+using import "bucket_array.bjou"
+using import "io.bjou"
+using import "hash_table.bjou"
+using import "hash_set.bjou"
+using import "hash.bjou"
+using import "pair.bjou"
+
+type str_hasher { const hash : <(string) : u64> = hash::hash }
+
+using import "globals.bjou"
+using import "compilation.bjou"
+using import "ast.bjou"
+using import "utils.bjou"
+using import "parser.bjou"
+
+
+type frontend {
+    n_files            : u64
+    n_lines            : u64
+    n_blank_lines      : u64
+    n_bytes            : u64
+    all_nodes          : bucket_array$ast
+    top_level_nodes    : bucket_array$astref
+    include_containers : bucket_array$include_container
+    files_seen         : string[...]
+    # files_seen         : hash_set$(string, str_hasher)
+
+    node_lock : mutex
+    include_container_lock : mutex
+    files_seen_lock        : mutex
+
+
+    proc create() : frontend {
+        return { frontend:
+            .node_lock              = mutex.create(),
+            .include_container_lock = mutex.create(),
+            .files_seen_lock        = mutex.create(),
+            .all_nodes              = bucket_array$ast.create(),
+            .include_containers     = bucket_array$include_container.create(),
+            .top_level_nodes        = bucket_array$astref.create(),
+            .files_seen             = [...string],
+            # .files_seen             = hash_set$(string, str_hasher).create(),
+        }
+    }
+
+    proc go(this) {
+        beg := measure_time_now_ms()
+
+        # do work
+
+        parse_beg := measure_time_now_ms()
+        if compil.args.no_parallel {
+            this.parse_serial()
+        } else {
+            this.parse_parallel()
+        }
+        parse_end := measure_time_now_ms()
+
+        if compil.args.stats {
+            using ui
+            ms := parse_end - parse_beg
+            phase_str := str("Parsed ")
+            phase_str  = concat(phase_str, str(this.n_files), str(" files"))
+            report_phase_time(phase_str.c_str(), ms, Attr.YELLOW)
+            phase_str.free()
+        }
+
+        # symbol_table := hash_table$(string, astref, str_hasher).create()
+        # for it := this.top_level_nodes.iter(); not it.is_end(); it.next() {
+        #     m_node := it.val()
+        #     if node : ast ref = m_node {
+        #         if decl : declaration = node {
+        #             symbol_table.insert(decl.name, node)
+        #         }
+        #     }
+        # }
+
+        end := measure_time_now_ms()
+
+        if compil.args.stats {
+            using ui
+            ms := end - beg
+            report_phase_time("Front-end", ms, Attr.GREEN)
+        }
+    }
+
+    proc parse_serial(this) {
+        foreach ref path in compil.args.input {
+            f        := open_file(path, search_paths: false)
+            new_path := str(f.path)
+
+            if this.first_encounter_of_file(new_path) {
+                p := parser.create(this, f, kind: parserkind.IMPORT)
+                p.go()
+            } else {
+                input_repeat_error(path)
+            }
+
+            new_path.free()
+        }
+    }
+
+    proc parse_parallel(this) {
+        n_threads := compil.args.threads
+        if n_threads == -1
+            n_threads = thread::hw_threads() - 1
+
+        pool := threadpool.create(n_threads)
+
+        foreach ref path in compil.args.input {
+            f        := open_file(path, search_paths: false)
+            new_path := str(f.path)
+
+        
+            if this.first_encounter_of_file_locked(new_path) {
+                p := new async_parser
+                @p = async_parser.create(this, pool, f, kind: parserkind.INPUT_FILE)
+                pool.add_task(async_parser_wrapper, p)
+            } else {
+                input_repeat_error(path)
+            }
+
+            new_path.free()
+        }
+
+        pool.wait()
+        pool.stop(stopmode.GRACEFUL)
+        pool.free()
+    }
+
+    proc total_lines(this) : u64
+        return this.n_lines
+
+    proc code_lines(this) : u64
+        return this.n_lines - this.n_blank_lines
+
+    proc __inline__ get_next_include_container_locked(this) : include_container ref {
+        this.include_container_lock.lock()
+            r := this._get_next_include_container()
+        this.include_container_lock.unlock()
+        return r
+    }
+
+    proc __inline__ get_next_include_container(this) : include_container ref {
+        return this._get_next_include_container()
+    }
+
+    proc _get_next_include_container(this) : include_container ref {
+        ic := { include_container: .nodes = bucket_array$astref.create() }
+        return this.include_containers.push(ic)
+    }
+
+
+    proc __inline__ first_encounter_of_file_locked(this, path : string ref) : bool {
+        this.files_seen_lock.lock()
+            r := this._first_encounter_of_file(path)
+        this.files_seen_lock.unlock()
+        return r
+    }
+
+    proc __inline__ first_encounter_of_file(this, path : string ref) : bool {
+        return this._first_encounter_of_file(path)
+    }
+
+    proc _first_encounter_of_file(this, path : string ref) : bool {
+        foreach ref f in this.files_seen {
+            if f == path { return false }
+        }
+
+        this.files_seen.push(path.copy())
+
+        return true
+    }
+
+    # proc _first_encounter_of_file(this, path : string ref) : bool {
+    #     print "!!! %", path.c_str()
+    #     search := this.files_seen.lookup(path)
+
+    #     if search.is_none() {
+    #         this.files_seen.insert(path.copy())
+    #         return true
+    #     }
+
+    #     return false
+    # }
+}
+
+proc __inline__ open_file(path : string ref, search_paths : bool) : file {
+    return open_file(path, search_paths, nothing)
+}
+proc open_file(path : string ref, search_paths : bool, from_cxt : (context ref | none)) : file {
+    f : (file | none) = nothing
+
+    if search_paths { f = search_for_file_and_open(path)     }
+    else            { f = file.open(path.c_str(), file.READ) }
+
+    if f' : file = f {
+        if not f'.good() {
+            open_file_error(path, from_cxt)
+        }
+        return f'
+    }
+            
+    open_file_error(path, from_cxt)
+
+    return { file: }
+}
+
+proc search_for_file_and_open(path : string ref) : (file | none) {
+    foreach ref prefix in compil.search_paths {
+        path' := prefix.copy()
+        path'.append(path)
+        f     := io::file.open(path'.c_str(), file.READ)
+        path'.free()
+
+        if f.good() { return f }
+    }
+
+    return nothing
+}
+
+proc open_file_error(path : string ref, from_cxt : (context ref | none)) {
+    err_str := str("Unable to read file '")
+    err_str.append(path)
+    err_str.append("'.")
+
+    eb := ui::error_builder.create()
+        .with_message(err_str.c_str())
+
+    if cxt : context ref = from_cxt {
+        eb = eb.add_location(cxt)
+    }
+
+    eb.report()
+}
+
+proc input_repeat_error(path : string ref) {
+    err_str := str("File '")
+    err_str.append(path)
+    err_str.append("' is repeated in the input file list.")
+    
+    ui::error(err_str.c_str())
+}
+
+proc multiple_include_error(path : string ref, intro_cxt : context ref) {
+    err_str := str("File '")
+    err_str.append(path)
+    err_str.append("' has already been encountered and may not be included again.")
+
+    ui::error_builder.create()
+        .with_message(err_str.c_str())
+        .add_location(intro_cxt)
+        .report()
+}

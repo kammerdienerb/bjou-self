@@ -1,0 +1,33 @@
+#! /usr/bin/env bjou
+# make.bjou
+
+import "build.bjou"
+
+\static_do {
+    sources := { "src/bjou.bjou" }
+
+    options := build::BuildOptions.create()
+
+    options.output_name = "bjou"
+
+    options.time    = true
+    options.verbose = not true
+
+    foreach f in sources
+        options.files.push(f)
+
+    options.link.push("pthread")
+    
+    options.module_search_paths.push("src") 
+    # options.module_search_paths.push("getRSS") 
+    # options.files.push("getRSS/libgetRSS.a")
+
+    # generate defs
+    defs_path := "src/defs.bjou" 
+    print "generating '%'", defs_path
+    defs := build::DefsFile.create(defs_path, "defs")
+    defs.add_def("BJOU_DEBUG", true)
+    defs.close()
+
+    build::build(options)
+}

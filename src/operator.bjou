@@ -1,0 +1,99 @@
+# operator.bjou
+
+module operator
+
+enum Op {
+    DELETE,
+    AS,
+    CALL,
+    SUBSCRIPT,
+    DOT,
+    NOT,
+    SIZEOF,
+    ADDR,
+    DEREF,
+    NEW,
+    BNEG,
+    MULT,
+    DIV,
+    MOD,
+    PLUS,
+    MINUS,
+    BSHL,
+    BSHR,
+    LSS,
+    LEQ,
+    GTR,
+    GEQ,
+    EQU,
+    NEQ,
+    BAND,
+    BXOR,
+    BOR,
+    AND,
+    OR,
+    ASSIGN,
+    MULT_ASSIGN,
+    DIV_ASSIGN,
+    MOD_ASSIGN,
+    PLUS_ASSIGN,
+    MINUS_ASSIGN,
+
+    INVALID,
+    N_OPS
+}
+
+enum Assoc {
+    LEFT,
+    RIGHT
+}
+
+op_table : (int, Assoc, bool, char*)[Op.N_OPS]
+
+const HIGHEST_BIN_PREC    := 12
+const HIGHEST_UN_PRE_PREC := 11
+
+proc init_op_table() {
+    #                           precedence, associativity,  is_unary,  str_of
+    op_table[Op.DELETE as int]       = (14,    Assoc.RIGHT, true,      "delete")
+    op_table[Op.AS as int]           = (13,    Assoc.LEFT,  true,      "as")
+    op_table[Op.CALL as int]         = (12,    Assoc.LEFT,  false,     "()")
+    op_table[Op.SUBSCRIPT as int]    = (12,    Assoc.LEFT,  false,     "[]")
+    op_table[Op.DOT as int]          = (12,    Assoc.LEFT,  false,     ".")
+    op_table[Op.NOT as int]          = (11,    Assoc.RIGHT, true,      "not")
+    op_table[Op.SIZEOF as int]       = (11,    Assoc.RIGHT, true,      "sizeof")
+    op_table[Op.ADDR as int]         = (11,    Assoc.RIGHT, true,      "&")
+    op_table[Op.DEREF as int]        = (11,    Assoc.RIGHT, true,      "@")
+    op_table[Op.NEW as int]          = (11,    Assoc.RIGHT, true,      "new")
+    op_table[Op.BNEG as int]         = (11,    Assoc.RIGHT, true,      "bneg")
+    op_table[Op.MULT as int]         = (10,    Assoc.LEFT,  false,     "*")
+    op_table[Op.DIV as int]          = (10,    Assoc.LEFT,  false,     "/")
+    op_table[Op.MOD as int]          = (10,    Assoc.LEFT,  false,     "%")
+    op_table[Op.PLUS as int]         = (9,     Assoc.LEFT,  false,     "+")
+    op_table[Op.MINUS as int]        = (9,     Assoc.LEFT,  false,     "-")
+    op_table[Op.BSHL as int]         = (8,     Assoc.LEFT,  false,     "bshl")
+    op_table[Op.BSHR as int]         = (8,     Assoc.LEFT,  false,     "bshr")
+    op_table[Op.LSS as int]          = (7,     Assoc.LEFT,  false,     "<")
+    op_table[Op.LEQ as int]          = (7,     Assoc.LEFT,  false,     "<=")
+    op_table[Op.GTR as int]          = (7,     Assoc.LEFT,  false,     ">")
+    op_table[Op.GEQ as int]          = (7,     Assoc.LEFT,  false,     ">=")
+    op_table[Op.EQU as int]          = (6,     Assoc.LEFT,  false,     "==")
+    op_table[Op.NEQ as int]          = (6,     Assoc.LEFT,  false,     "!=")
+    op_table[Op.BAND as int]         = (5,     Assoc.LEFT,  false,     "band")
+    op_table[Op.BXOR as int]         = (4,     Assoc.LEFT,  false,     "bxor")
+    op_table[Op.BOR as int]          = (3,     Assoc.LEFT,  false,     "bor")
+    op_table[Op.AND as int]          = (2,     Assoc.LEFT,  false,     "and")
+    op_table[Op.OR as int]           = (2,     Assoc.LEFT,  false,     "or")
+    op_table[Op.ASSIGN as int]       = (1,     Assoc.RIGHT, false,     "=")
+    op_table[Op.MULT_ASSIGN as int]  = (1,     Assoc.RIGHT, false,     "*=")
+    op_table[Op.DIV_ASSIGN as int]   = (1,     Assoc.RIGHT, false,     "/=")
+    op_table[Op.MOD_ASSIGN as int]   = (1,     Assoc.RIGHT, false,     "%=")
+    op_table[Op.PLUS_ASSIGN as int]  = (1,     Assoc.RIGHT, false,     "+=")
+    op_table[Op.MINUS_ASSIGN as int] = (1,     Assoc.RIGHT, false,     "-=")
+}
+
+proc __inline__ prec(op : Op) : int       { return op_table[op as int].0     }
+proc __inline__ assoc(op : Op) : Assoc    { return op_table[op as int].1     }
+proc __inline__ is_binary(op : Op) : bool { return not op_table[op as int].2 }
+proc __inline__ is_unary(op : Op) : bool  { return op_table[op as int].2     }
+proc __inline__ str_of(op : Op) : char*   { return op_table[op as int].3     }

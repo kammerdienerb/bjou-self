@@ -1,0 +1,18 @@
+type forstmt extends astbase {
+    ini   : astref
+    cond  : astref
+    step  : astref
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : forstmt {
+        r := { forstmt: }
+        r.init()
+        return r
+    }
+}

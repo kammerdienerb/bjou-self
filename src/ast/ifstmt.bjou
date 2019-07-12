@@ -1,0 +1,17 @@
+type ifstmt extends astbase {
+    cond       : astref
+    stmts      : astref[...]
+    else_block : astref
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : ifstmt {
+        r := { ifstmt: }
+        r.init()
+        return r
+    }
+}

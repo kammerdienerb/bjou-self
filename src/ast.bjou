@@ -1,0 +1,272 @@
+# ast.bjou
+
+module ast
+
+using import "types.bjou"
+using import "bucket_array.bjou"
+
+using import "context.bjou"
+using import "debug.bjou"
+using import "utils.bjou"
+using import "ty.bjou"
+
+proc __inline__ add(array : bucket_array$ast ref, node : ast ref) : astref {
+    return array.push(node)
+}
+
+proc __inline__ add(array : bucket_array$ast ref, node : ast) : astref {
+    return add(array, getref(node))
+}
+
+proc __inline__ get_next_node_slot(array : bucket_array$ast ref) : astref {
+    return array.push_blank()
+}
+
+type ast_flag_t = u64
+
+abstract type astbase {
+    flags    : u32
+    cxt      : context
+
+
+    proc init(this) {
+        this.flags = 0
+    }
+
+    proc set_flag(this, flag : ast_flag) {
+        this.flags = this.flags bor (1u64 bshl (flag as ast_flag_t))
+    }
+
+    proc clear_flag(this, flag : ast_flag) {
+        this.flags = this.flags band bneg (1u64 bshl (flag as ast_flag_t))
+    }
+
+    proc get_flag(this, flag : ast_flag) : bool {
+        return this.flags band (1u64 bshl (flag as ast_flag_t))
+    }
+}
+
+type include_container {
+    nodes : bucket_array$astref
+}
+
+include "ast/typed.bjou"
+    include "ast/declarator.bjou"
+    type all_declarators =
+        ( declarator
+        | arraydeclarator
+        | slicedeclarator
+        | dynamicarraydeclarator
+        | pointerdeclarator
+        | refdeclarator
+        | sumdeclarator
+        | tupledeclarator
+        | procdeclarator )
+
+    include "ast/declaration.bjou"
+        include "ast/vardecl.bjou"
+        include "ast/constantdecl.bjou"
+        include "ast/procdef.bjou"
+        include "ast/templateprocdef.bjou"
+        include "ast/typedef.bjou"
+        include "ast/templatetypedef.bjou"
+        include "ast/enumdef.bjou"
+        type all_declarations =
+            ( vardecl
+            | constantdecl
+            | procdef
+            | templateprocdef
+            | typedef
+            | templatetypedef
+            | enumdef)
+
+    include "ast/expr.bjou"
+        include "ast/integerliteral.bjou"
+        include "ast/floatliteral.bjou"
+        include "ast/stringliteral.bjou"
+        include "ast/charliteral.bjou"
+        include "ast/boolliteral.bjou"
+        include "ast/nothingliteral.bjou"
+        include "ast/qidentifier.bjou"
+        include "ast/namedarg.bjou"
+        include "ast/tupleliteral.bjou"
+        include "ast/initializerlist.bjou"
+        include "ast/sliceliteral.bjou"
+        include "ast/dynamicarrayliteral.bjou"
+        include "ast/lenexpr.bjou"
+        include "ast/newexpr.bjou"
+        include "ast/deleteexpr.bjou"
+        include "ast/sizeofexpr.bjou"
+        include "ast/addrexpr.bjou"
+        include "ast/derefexpr.bjou"
+        include "ast/notexpr.bjou"
+        include "ast/bnegexpr.bjou"
+        include "ast/asexpr.bjou"
+        include "ast/binexpr.bjou"
+            include "ast/callexpr.bjou"
+            include "ast/subscriptexpr.bjou"
+            include "ast/dotexpr.bjou"
+            include "ast/multexpr.bjou"
+            include "ast/divexpr.bjou"
+            include "ast/modexpr.bjou"
+            include "ast/plusexpr.bjou"
+            include "ast/minusexpr.bjou"
+            include "ast/bshlexpr.bjou"
+            include "ast/bshrexpr.bjou"
+            include "ast/lssexpr.bjou"
+            include "ast/leqexpr.bjou"
+            include "ast/gtrexpr.bjou"
+            include "ast/geqexpr.bjou"
+            include "ast/equexpr.bjou"
+            include "ast/neqexpr.bjou"
+            include "ast/bandexpr.bjou"
+            include "ast/bxorexpr.bjou"
+            include "ast/borexpr.bjou"
+            include "ast/andexpr.bjou"
+            include "ast/orexpr.bjou"
+            include "ast/assignexpr.bjou"
+            include "ast/multassignexpr.bjou"
+            include "ast/divassignexpr.bjou"
+            include "ast/modassignexpr.bjou"
+            include "ast/plusassignexpr.bjou"
+            include "ast/minusassignexpr.bjou"
+    type all_exprs =
+        ( integerliteral
+        | floatliteral
+        | stringliteral
+        | charliteral
+        | boolliteral
+        | nothingliteral
+        | qidentifier
+        | namedarg
+        | tupleliteral
+        | initializerlist
+        | sliceliteral
+        | dynamicarrayliteral
+        | lenexpr
+        | newexpr
+        | deleteexpr
+        | sizeofexpr
+        | addrexpr
+        | derefexpr
+        | notexpr
+        | bnegexpr
+        | asexpr
+        | callexpr
+        | subscriptexpr
+        | dotexpr
+        | multexpr
+        | divexpr
+        | modexpr
+        | plusexpr
+        | minusexpr
+        | bshlexpr
+        | bshrexpr
+        | lssexpr
+        | leqexpr
+        | gtrexpr
+        | geqexpr
+        | equexpr
+        | neqexpr
+        | bandexpr
+        | bxorexpr
+        | borexpr
+        | andexpr
+        | orexpr
+        | assignexpr
+        | multassignexpr
+        | divassignexpr
+        | modassignexpr
+        | plusassignexpr
+        | minusassignexpr)
+
+include "ast/printstmt.bjou"
+include "ast/returnstmt.bjou"
+include "ast/ifstmt.bjou"
+include "ast/elsestmt.bjou"
+include "ast/forstmt.bjou"
+include "ast/foreachstmt.bjou"
+include "ast/whilestmt.bjou"
+include "ast/dowhilestmt.bjou"
+include "ast/breakstmt.bjou"
+include "ast/continuestmt.bjou"
+include "ast/importstmt.bjou"
+include "ast/usingstmt.bjou"
+include "ast/includestmt.bjou"
+type all_stmts =
+    ( printstmt
+    | returnstmt
+    | ifstmt
+    | elsestmt
+    | forstmt
+    | foreachstmt
+    | whilestmt 
+    | dowhilestmt 
+    | breakstmt
+    | continuestmt
+    | importstmt
+    | usingstmt
+    | includestmt)
+
+include "ast/this.bjou"
+include "ast/templatedef.bjou"
+include "ast/templateinst.bjou"
+include "ast/arglist.bjou"
+include "ast/directive.bjou"
+include "ast/moduledecl.bjou"
+type other_nodes =
+    ( thisparam
+    | thistype
+    | templatedef
+    | templateinst
+    | arglist
+    | directive
+    | moduledecl)
+
+type ast    = (all_declarators | all_declarations | all_exprs | all_stmts | other_nodes | none)
+type astref = (ast ref | none)
+
+enum ast_flag {
+    NO_MANGLE,
+    IS_INLINE,
+    IS_EXTERN,
+    IS_VARARG,
+    ANONYMOUS_PROC,
+    C_VARARG,
+    LEAF_EXPR,
+    PAREN,
+    IS_DESTRUCTURE,
+    FOREACH_TAKE_REF,
+    TYPE_ALIAS
+}
+
+proc visit$visitor_data_T(node    : astref,
+                          visitor : <(astref, visitor_data_T)>,
+                          data    : visitor_data_T) {
+    if node' : ast ref = node {
+        if x : procdef = node' { x.visit(visitor, data) }
+    }
+}
+
+proc unsafe_baseref(this : ast ref) : astbase ref {
+    debug_assert(not this.is_none(), "unsafe_baseref(ast ref) failed")
+    return @(\__sum_data{ this } as astbase*)
+}
+
+proc unsafe_baseref(this : astref) : astbase ref {
+    debug_assert(not this.is_none(), "unsafe_baseref(astref) failed")
+    return unsafe_baseref(unsafe_ast_ref(this))
+}
+
+proc unsafe_ast_ref(this : astref) : ast ref {
+    # @bad
+    # Assuming equivalence of ref and pointer here.
+    return @@(\__sum_data{ this } as ast**)
+}
+
+proc new_void_declarator(array : bucket_array$ast ref) : declarator {
+    d           := declarator.create()
+    d.identifier = add(array, qidentifier.create("void"))
+
+    return d
+}

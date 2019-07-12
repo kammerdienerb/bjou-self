@@ -1,0 +1,11 @@
+type gtrexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : gtrexpr {
+        r := { gtrexpr: }
+        r.init()
+        return r
+    }
+}

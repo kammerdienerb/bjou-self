@@ -1,0 +1,156 @@
+# bjou.bjou
+
+main()
+
+import "__preload.bjou"
+
+using import "cli.bjou"
+import "thread.bjou"
+import "ui.bjou"
+import "random.bjou"
+
+using import "compilation.bjou"
+using import "ast.bjou"
+using import "version.bjou"
+using import "defs.bjou"
+using import "globals.bjou"
+using import "operator.bjou"
+using import "context.bjou"
+
+
+proc main() {
+    main_init()
+
+    arg_parser := ArgParser.create(env.args()[0].c_str())
+    args       := ui::argset.create()
+
+    if not parse_arguments(arg_parser, args) {
+        return
+    }
+
+    if args.version {
+        if BJOU_DEBUG    { print "bJou (debug) version %.%", VER_MAJ, VER_MIN }
+        else             { print "bJou version %.%", VER_MAJ, VER_MIN         }
+        return
+    }
+    if args.help {
+        help := arg_parser.help()
+        print "%", help.c_str()
+        return
+    }
+
+    the_compil := compilation.create(args)
+    arg_parser.free()
+
+    # args.show()
+    setup_default_compilation(the_compil)
+
+    if not |args.input|    { ui::error("No input files!") }
+
+    start_default_compilation()
+
+    args.free()
+}
+
+proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : bool {
+    # add all arguments
+    arg_parser.setUnlabelled("FILES", "Input source files.")
+
+    optimize       := arg_parser.addSwitch('O', "optimize")
+                        .withDesc("Run LLVM optimization passes.")
+    emit_llvm      := arg_parser.addSwitch("emit-llvm")
+                        .withDesc("Ouput an LLVM bytecode file.")
+    no_link        := arg_parser.addSwitch('c', "no-link")
+                        .withDesc("Compile but do not link.")
+    no_lld         := arg_parser.addSwitch("no-lld")
+                        .withDesc("Use the system linker instead of attempting to use lld.")
+    no_color       := arg_parser.addSwitch("no-color")
+                        .withDesc("Turn off colored output.")
+    no_preload     := arg_parser.addSwitch("no-preload")
+                        .withDesc("Do not automatically import preload modules.")
+    no_abc         := arg_parser.addSwitch("no-abc")
+                        .withDesc("Turn off array bounds checking.")
+    no_parallel    := arg_parser.addSwitch("no-parallel")
+                        .withDesc("Turn off compilation parallelization.")
+    symbols        := arg_parser.addSwitch("symbols")
+                        .withDesc("Print symbol tables to STDOUT.")
+    stats          := arg_parser.addSwitch("stats")
+                        .withDesc("Print compilation statistics to STDOUT.")
+    stats_no_files := arg_parser.addSwitch("stats-no-files")
+                        .withDesc("When printing stats, don't print parse times of every file.")
+    front          := arg_parser.addSwitch("front")
+                        .withDesc("Only run the front end of the compiler.")
+    verbose        := arg_parser.addSwitch('v', "verbose")
+                        .withDesc("Print the LLVM IR to STDOUT.")
+    mfeat          := arg_parser.addValueString("mfeat")
+                        .withDesc("Features to add to the target CPU")
+    march          := arg_parser.addValueString("march")
+                        .withDesc("Architecture string to target.")
+    searchpath     := arg_parser.addMultiValueString('I', "searchpath")
+                        .withDesc("Add a path to search when looking for modules.")
+    link           := arg_parser.addMultiValueString('l', "link")
+                        .withDesc("Add the name of a library to link.")
+    output         := arg_parser.addValueString('o', "output")
+                        .withDesc("Specify the name of the target output file.")
+    version        := arg_parser.addSwitch("version")
+                        .withDesc("Display version info and exit.")
+    help           := arg_parser.addSwitch('h', "help")
+                        .withDesc("Display usage info and exit.")
+    threads        := arg_parser.addValueInt("threads")
+                        .withDesc("The number of threads to be used in parallel compilation.")
+
+    # do the parsing
+    success := arg_parser.parse(env.args())
+
+    if not success {
+        usage := arg_parser.usage()
+        print "%", usage.c_str()
+        usage.free()
+    }
+
+    # transfer the arg values to the argset
+    args.input.set(arg_parser.unlabelled.as_slice())
+    args.optimize       = optimize.set
+    args.emit_llvm      = emit_llvm.set
+    args.no_link        = no_link.set
+    args.no_lld         = no_lld.set
+    args.no_color       = no_color.set
+    args.no_preload     = no_preload.set
+    args.no_abc         = no_abc.set
+    args.no_parallel    = no_parallel.set
+    args.symbols        = symbols.set
+    args.stats          = stats.set
+    args.stats_no_files = stats_no_files.set
+    args.front          = front.set
+    args.verbose        = verbose.set
+    args.version        = version.set
+    args.help           = help.set
+    if n_threads : int ref = threads.value()
+        args.threads = n_threads
+    if mf : string ref = mfeat.value()
+        args.mfeat.set(mf)
+    if ma : string ref = march.value()
+        args.march.set(ma)
+    if searchpaths : string[...] ref = searchpath.values()
+        args.searchpath.set(searchpaths.as_slice())
+    if links : string[...] ref = link.values()
+        args.link.set(links.as_slice())
+    if output_str : string ref = output.value()
+        args.output.set(output_str)
+    args.ignored.set(arg_parser.ignored.as_slice())
+
+    return success
+}
+
+proc main_init() {
+    using random
+    using __sys
+    using thread
+
+    output_lock = mutex.create()
+    seedrand(time(NULL as time_t*))
+
+    init_parse_table()
+    init_get_ch_val_escape_map()
+    init_op_table()
+}

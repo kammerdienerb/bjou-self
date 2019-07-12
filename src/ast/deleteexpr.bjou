@@ -1,0 +1,16 @@
+# deleteexpr.bjou
+
+type deleteexpr extends exprbase {
+    right : astref
+    
+
+    proc init(this) {
+        exprbase.init(this)
+    }
+
+    proc create() : deleteexpr {
+        r := { deleteexpr:  }
+        r.init()
+        return r
+    }
+}

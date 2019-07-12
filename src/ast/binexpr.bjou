@@ -1,0 +1,11 @@
+# binexpr.bjou
+
+abstract type binexprbase extends exprbase {
+    left  : astref
+    right : astref
+
+
+    proc init(this) {
+        exprbase.init(this)
+    }
+}

@@ -1,0 +1,11 @@
+type subscriptexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : subscriptexpr {
+        r := { subscriptexpr: }
+        r.init()
+        return r
+    }
+}

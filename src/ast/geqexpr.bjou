@@ -1,0 +1,11 @@
+type geqexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : geqexpr {
+        r := { geqexpr: }
+        r.init()
+        return r
+    }
+}

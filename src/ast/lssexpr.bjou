@@ -1,0 +1,11 @@
+type lssexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : lssexpr {
+        r := { lssexpr: }
+        r.init()
+        return r
+    }
+}

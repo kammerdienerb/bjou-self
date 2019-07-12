@@ -1,0 +1,11 @@
+type borexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : borexpr {
+        r := { borexpr: }
+        r.init()
+        return r
+    }
+}

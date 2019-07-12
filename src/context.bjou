@@ -1,0 +1,84 @@
+# context.bjou
+#
+# source location/range
+
+module context
+
+type location {
+    ln : u32
+    ch : u32
+}
+
+type context {
+    file : (string ref | none)
+    beg  : location
+    end  : location
+
+
+    proc create() : context
+        return { context: .file = nothing }
+
+    proc create(file : string ref) : context
+        return { context: .file = file }
+
+    proc copy(this) : context {
+        return { context:
+            .file = this.file,
+            .beg  = this.beg,
+            .end  = this.end,
+        }
+    }
+
+    proc from(c : context ref) : context {
+        return { context:
+            .file = c.file,
+            .beg  = c.end,
+            .end  = c.end,
+        }
+    }
+
+    proc start(this, c : context ref) {
+        this.file = c.file
+        this.beg  = c.end
+    }
+
+    proc finish(this, c : context ref) {
+        this.end = c.end
+        if this.end.ch > 1
+            this.end.ch -= 1
+    }
+
+    proc finish(this, c : context ref, wtspc : context ref) {
+        this.end = diff(c, wtspc)
+        if this.end.ch > 1
+            this.end.ch -= 1
+    }
+
+    proc from_last_char(this) : context {
+        c : context = this
+        c.file = c.file
+        c.beg = c.end
+        if c.beg.ch != 1
+            c.beg.ch -= 1
+        return c
+    }
+
+    proc show(this) {
+        s := "???"
+        if f : string ref = this.file {
+            s = f.c_str() 
+        }
+
+        print "% :: ln %, ch % :: ln %, ch %",
+              s, this.beg.ln, this.beg.ch, this.end.ln, this.end.ch
+    }
+}
+
+proc diff(c1 : context ref, c2 : context ref) : location {
+    # Assumes c2 is contained within c1
+    if (c2.beg.ln == c1.end.ln and c2.beg.ch < c1.beg.ch)
+    or c2.beg.ln < c1.beg.ln
+        return c1.end
+
+    return c2.beg
+}

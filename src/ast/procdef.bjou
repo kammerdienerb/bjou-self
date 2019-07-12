@@ -1,0 +1,20 @@
+# procdef.bjou
+
+type procdef extends declaration {
+    param_decls : astref[...]
+    ret_decl    : astref
+    stmts       : astref[...]
+
+    
+    proc init(this) {
+        declaration.init(this)
+        this.param_decls = [...astref]
+        this.stmts       = [...astref]
+    }
+
+    proc create() : procdef {
+        r := { procdef:  }
+        r.init()
+        return r
+    }
+}

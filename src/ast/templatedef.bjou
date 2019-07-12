@@ -1,0 +1,16 @@
+# templatedef.bjou
+
+type templatedef extends astbase {
+    names : string[...]
+
+    proc init(this) {
+        astbase.init(this)
+        this.names = [...string]
+    }
+
+    proc create() : templatedef {
+        r := { templatedef: }
+        r.init()
+        return r
+    }
+}

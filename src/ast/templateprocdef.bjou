@@ -1,0 +1,17 @@
+# templateprocdef.bjou
+
+type templateprocdef extends declaration {
+    template_def : astref
+    template     : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : templateprocdef {
+        r := { templateprocdef:  }
+        r.init()
+        return r
+    }
+}

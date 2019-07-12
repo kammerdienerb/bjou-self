@@ -1,0 +1,11 @@
+type continuestmt extends astbase {
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : continuestmt {
+        r := { continuestmt: }
+        r.init()
+        return r
+    }
+}

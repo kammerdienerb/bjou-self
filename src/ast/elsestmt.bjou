@@ -1,0 +1,15 @@
+type elsestmt extends astbase {
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : elsestmt {
+        r := { elsestmt: }
+        r.init()
+        return r
+    }
+}

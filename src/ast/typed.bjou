@@ -1,0 +1,8 @@
+# typed.bjou
+
+abstract type typed extends astbase {
+    ty : (ty ref | none)
+
+    
+    proc init(this) { astbase.init(this) }
+}

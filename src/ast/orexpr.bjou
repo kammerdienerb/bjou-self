@@ -1,0 +1,11 @@
+type orexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : orexpr {
+        r := { orexpr: }
+        r.init()
+        return r
+    }
+}

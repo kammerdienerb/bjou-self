@@ -1,0 +1,11 @@
+type plusexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : plusexpr {
+        r := { plusexpr: }
+        r.init()
+        return r
+    }
+}

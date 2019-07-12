@@ -1,0 +1,14 @@
+type returnstmt extends astbase {
+    expr : astref
+
+
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : returnstmt {
+        r := { returnstmt: }
+        r.init()
+        return r
+    }
+}

@@ -1,0 +1,17 @@
+# vardecl.bjou
+
+type vardecl extends declaration {
+    type_decl : astref
+    expr      : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : vardecl {
+        r := { vardecl: }
+        r.init()
+        return r
+    }
+}

@@ -1,0 +1,17 @@
+type directive extends astbase {
+    name : string
+    args : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.name = str()
+        this.args = [...astref]
+    }
+
+    proc create() : directive {
+        r := { directive: }
+        r.init()
+        return r
+    }
+}

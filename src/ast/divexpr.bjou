@@ -1,0 +1,11 @@
+type divexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : divexpr {
+        r := { divexpr: }
+        r.init()
+        return r
+    }
+}

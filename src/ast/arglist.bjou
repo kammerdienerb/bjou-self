@@ -1,0 +1,19 @@
+# arglist.bjou
+
+type arglist extends astbase {
+    exprs : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.exprs = [...astref]
+    }
+
+    proc create() : arglist {
+        r := { arglist: }
+        
+        r.init()
+
+        return r
+    }
+}

@@ -1,0 +1,49 @@
+# utils.bjou
+#
+# misc utilites
+
+module bjou_utils
+
+proc base_init$(derived_T, base_T)(b : base_T) : derived_T {
+    d := { derived_T: }
+    @((&d) as base_T*) = b
+    return d
+}
+
+proc base_init$(derived_T, base_T)(d : derived_T, b : base_T) : derived_T {
+    @((&d) as base_T*) = b
+    return d
+}
+
+proc next_power_of_2(u : u64) : u64 {
+    if u == 0
+        return 2
+
+    u -= 1
+    u  = u bor (u bshr 1u64)
+    u  = u bor (u bshr 2u64)
+    u  = u bor (u bshr 4u64)
+    u  = u bor (u bshr 8u64)
+    u  = u bor (u bshr 16u64)
+    u += 1
+
+    return u
+}
+
+proc is_none$T(arg : T) : bool {
+    if n : none = arg
+        return true
+
+    return false
+}
+
+uid_counter : u64
+proc make_uid(hint : char*) : string {
+    s := str("__bjou_")
+    s.append(hint)
+    n := str(uid_counter)
+    s.append(n)
+    n.free()
+    uid_counter += 1
+    return s
+}

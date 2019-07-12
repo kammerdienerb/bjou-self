@@ -1,0 +1,17 @@
+# importstmt.bjou
+
+type importstmt extends astbase {
+    path : string 
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.path = str()
+    }
+
+    proc create() : importstmt {
+        r := { importstmt: }
+        r.init()
+        return r
+    }
+}

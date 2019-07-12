@@ -1,0 +1,11 @@
+type multassignexpr extends binexprbase {
+    proc init(this) {
+        binexprbase.init(this)
+    }
+
+    proc create() : multassignexpr {
+        r := { multassignexpr: }
+        r.init()
+        return r
+    }
+}

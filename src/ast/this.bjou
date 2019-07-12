@@ -1,0 +1,25 @@
+# this.bjou
+
+type thisparam extends astbase {
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : thisparam {
+        r := { thisparam: }
+        r.init()
+        return r
+    }
+}
+
+type thistype extends astbase {
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : thistype {
+        r := { thistype: }
+        r.init()
+        return r
+    }
+}

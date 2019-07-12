@@ -1,0 +1,19 @@
+# charliteral.bjou
+
+type charliteral extends exprbase {
+    val : char
+
+
+    proc init(this, val : char) {
+        exprbase.init(this)
+
+        this.val = val
+    }
+
+    proc create(val : char) : charliteral {
+        r := { charliteral: }
+        r.init(val)
+
+        return r
+    }
+}

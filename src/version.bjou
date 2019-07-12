@@ -1,0 +1,8 @@
+# version.bjou
+#
+# version information
+
+module version
+
+const VER_MAJ := 0
+const VER_MIN := 7

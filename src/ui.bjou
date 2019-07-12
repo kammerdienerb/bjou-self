@@ -1,0 +1,767 @@
+# ui.bjou
+
+module ui
+
+using import "cli.bjou"
+using import "io.bjou"
+
+using import "globals.bjou"
+using import "context.bjou"
+
+type argset {
+    input       : string[...]
+
+    # switches
+    optimize       : bool
+    emit_llvm      : bool
+    no_link        : bool
+    no_lld         : bool
+    no_color       : bool
+    no_preload     : bool
+    no_abc         : bool
+    no_parallel    : bool
+    symbols        : bool
+    stats          : bool
+    stats_no_files : bool
+    front          : bool
+    verbose        : bool
+
+    version        : bool
+    help           : bool
+
+    # values
+    mfeat          : string
+    march          : string
+    threads        : int
+    searchpath     : string[...]
+    link           : string[...]
+    output         : string
+
+    ignored        : string[...]
+
+    proc create() : argset {
+        return { argset: 
+            .input      = [...string],
+            .mfeat      = str(),
+            .march      = str(),
+            .threads    = -1,
+            .searchpath = [...string],
+            .link       = [...string],
+            .output     = str(),
+            .ignored    = [...string]
+        }
+    }
+
+    proc free(this) {
+        this.ignored.free()
+        this.output.free()
+        this.link.free()
+        this.searchpath.free()
+        this.march.free()
+        this.mfeat.free()
+        this.input.free()
+    }
+    
+    proc show(this) {
+        if |this.input| {
+            print    "input files    = ["
+            foreach ref f in this.input    print "    '%'", f.c_str()
+            print    "]"
+        } else print "input files    = []"
+        print        "optimize       = %", this.optimize
+        print        "emit_llvm      = %", this.emit_llvm
+        print        "no_link        = %", this.no_link
+        print        "no_lld         = %", this.no_lld
+        print        "no_color       = %", this.no_color
+        print        "no_preload     = %", this.no_preload
+        print        "no_abc         = %", this.no_abc
+        print        "no_parallel    = %", this.no_parallel
+        print        "symbols        = %", this.symbols
+        print        "stats          = %", this.stats
+        print        "stats-no-files = %", this.stats_no_files
+        print        "front          = %", this.front
+        print        "verbose        = %", this.verbose
+        print        "version        = %", this.version
+        print        "help           = %", this.help
+        print        "threads        = %", this.threads
+        print        "mfeat          = '%'", this.mfeat.c_str()
+        print        "march          = '%'", this.march.c_str()
+        if |this.searchpath| {
+            print    "searchpaths    = ["
+            foreach ref p in this.searchpath print "    '%'", p.c_str()
+            print     "]"
+        } else print "searchpaths    = []"
+        if |this.link| {
+            print    "link           = ["
+            foreach ref l in this.link       print "    '%'", l.c_str()
+            print    "]"
+        } else print "link           = []"
+        print        "output         = '%'", this.output.c_str()
+        if |this.ignored| {
+            print    "ignored        = ["
+            foreach ref i in this.ignored    print "    '%'", i.c_str()
+            print    "]"
+        } else print "ignored        = []"
+    }
+}
+
+proc strattr(s : string ref, attr : char*) : string ref {
+    if cstrlen(attr) {
+        s = concat(str(attr), s, str(RESET))
+    }
+    return s
+}
+
+proc strattr(s : string ref, attr1 : char*, attr2 : char*) : string ref {
+    if cstrlen(attr1) and cstrlen(attr2) {
+        s = concat(str(attr1), str(attr2), s, str(RESET))
+    }
+    return s
+}
+
+proc strattr(s : string ref, attr1 : char*, attr2 : char*, attr3 : char*) : string ref {
+    if cstrlen(attr1) and cstrlen(attr2) and cstrlen(attr3) {
+        s = concat(concat(str(attr1), str(attr2), str(attr3)), s, str(RESET))
+    }
+    return s
+}
+
+abstract type error_builder_base {
+    message   : string
+    notes     : string[...]
+    locations : ((string | none), context)[...]
+
+    
+    proc free(this) {
+        foreach ref loc in this.locations {
+            if s : string = loc.0
+                s.free()
+        }
+        this.locations.free()
+        
+        foreach ref note in this.notes {
+            note.free()
+        }
+        this.notes.free()
+        this.message.free()
+
+        delete &this
+    }
+
+    proc with_message(this, msg : char*) {
+        this.message.set(msg)
+    }
+
+    proc add_note(this, note : char*) {
+        this.notes.push(str(note))
+    }
+    
+    proc add_location(this, msg : char*, cxt : context) {
+        s : (string | none) = str(msg)
+        this.locations.push((s, cxt))
+    }
+    
+    proc add_location(this, cxt : context) {
+        s : (string | none) = nothing
+        this.locations.push((s, cxt))
+    }
+
+}
+
+type error_builder extends error_builder_base {
+    fatal     : bool
+
+    
+    proc is_fatal(this, f : bool) : error_builder ref {
+        this.fatal = f
+        return this
+    }
+    
+    proc with_message(this, msg : char*) : error_builder ref {
+        error_builder_base.with_message(this, msg)
+        return this
+    }
+
+    proc add_note(this, note : char*) : error_builder ref {
+        error_builder_base.add_note(this, note)
+        return this
+    }
+    
+    proc add_location(this, msg : char*, cxt : context) : error_builder ref {
+        error_builder_base.add_location(this, msg, cxt)
+        return this
+    }
+    
+    proc add_location(this, cxt : context) : error_builder ref {
+        error_builder_base.add_location(this, cxt)
+        return this
+    }
+
+    proc create() : error_builder ref {
+        r := new error_builder
+        @r = { error_builder:
+            .fatal     = true,
+            .message   = str(),
+            .notes     = [...string],
+            .locations = [...((string | none), context)],
+        }
+
+        return @r
+    }
+
+    proc report(this) : error_builder ref {
+        output_lock.lock()
+
+        write_error(this.message)
+        foreach ref loc in this.locations {
+            if msg : string = loc.0 {
+                msg' := msg.copy()
+                strattr(msg', get_attr(Attr.GREEN))
+                file.stderr().write(msg') 
+                file.stderr().write("\n", 1) 
+                msg'.free()
+            }
+            highlight_source_location(loc.1, Attr.RED)
+        }
+        foreach ref note in this.notes {
+            note'  := note.copy()
+            strattr(note', get_attr(Attr.GREEN))
+            note'' := str("        *** ")
+            note''.append(note')
+            file.stderr().write(note'')
+            file.stderr().write("\n", 1) 
+            note''.free()
+            note'.free()
+        }
+        file.stderr().write("\n", 1)
+
+        if this.fatal    { (@compil).abort() }
+        
+        output_lock.unlock()    
+        return this
+    }
+}
+
+type warning_builder extends error_builder_base {
+    proc create() : warning_builder ref {
+        r := new warning_builder
+        @r = { warning_builder:
+            .message   = str(),
+            .notes     = [...string],
+            .locations = [...((string | none), context)],
+        }
+
+        return @r
+    }
+    
+    proc with_message(this, msg : char*) : warning_builder ref {
+        error_builder_base.with_message(this, msg)
+        return this
+    }
+
+    proc add_note(this, note : char*) : warning_builder ref {
+        error_builder_base.add_note(this, note)
+        return this
+    }
+    
+    proc add_location(this, msg : char*, cxt : context) : warning_builder ref {
+        error_builder_base.add_location(this, msg, cxt)
+        return this
+    }
+    
+    proc add_location(this, cxt : context) : warning_builder ref {
+        error_builder_base.add_location(this, cxt)
+        return this
+    }
+
+    proc report(this) : warning_builder ref {
+        output_lock.lock()
+
+        write_warning(this.message)
+        foreach ref loc in this.locations {
+            if msg : string = loc.0 {
+                msg' := msg.copy()
+                strattr(msg', get_attr(Attr.GREEN))
+                file.stderr().write(msg') 
+                file.stderr().write("\n", 1) 
+                msg'.free()
+            }
+            highlight_source_location(loc.1, Attr.MAGENTA)
+        }
+        foreach ref note in this.notes {
+            note'  := note.copy()
+            strattr(note', get_attr(Attr.GREEN))
+            note'' := str("        *** ")
+            note''.append(note')
+            file.stderr().write(note'')
+            file.stderr().write("\n", 1) 
+            note''.free()
+            note'.free()
+        }
+        file.stderr().write("\n", 1)
+        
+        output_lock.unlock()    
+
+        return this
+    }
+}
+
+enum Attr {
+    RESET,
+    BOLD,
+    UNDERLINE,
+    BLINK,
+    INVERT,
+    BOLD_OFF,
+    UNDERLINE_OFF,
+    BLINK_OFF,
+    INVERT_OFF,
+    BLACK,
+    RED,
+    GREEN,
+    YELLOW,
+    BLUE,
+    MAGENTA,
+    CYAN,
+    WHITE,
+    BG_BLACK,
+    BG_RED,
+    BG_GREEN,
+    BG_YELLOW,
+    BG_BLUE,
+    BG_MAGENTA,
+    BG_CYAN,
+    BG_WHITE
+}
+
+proc get_attr(attr : Attr) : char* {
+    if not compil.isnull() and compil.args.no_color
+        return ""
+
+    if      attr == Attr.RESET         return cli::RESET
+    else if attr == Attr.BOLD          return cli::BOLD
+    else if attr == Attr.UNDERLINE     return cli::UNDERLINE
+    else if attr == Attr.BLINK         return cli::BLINK
+    else if attr == Attr.INVERT        return cli::INVERT
+    else if attr == Attr.BOLD_OFF      return cli::BOLD_OFF
+    else if attr == Attr.UNDERLINE_OFF return cli::UNDERLINE_OFF
+    else if attr == Attr.BLINK_OFF     return cli::BLINK_OFF
+    else if attr == Attr.INVERT_OFF    return cli::INVERT_OFF
+    else if attr == Attr.BLACK         return cli::BLACK
+    else if attr == Attr.RED           return cli::RED
+    else if attr == Attr.GREEN         return cli::GREEN
+    else if attr == Attr.YELLOW        return cli::YELLOW
+    else if attr == Attr.BLUE          return cli::BLUE
+    else if attr == Attr.MAGENTA       return cli::MAGENTA
+    else if attr == Attr.CYAN          return cli::CYAN
+    else if attr == Attr.WHITE         return cli::WHITE
+    else if attr == Attr.BG_BLACK      return cli::BG_BLACK
+    else if attr == Attr.BG_RED        return cli::BG_RED
+    else if attr == Attr.BG_GREEN      return cli::BG_GREEN
+    else if attr == Attr.BG_YELLOW     return cli::BG_YELLOW
+    else if attr == Attr.BG_BLUE       return cli::BG_BLUE
+    else if attr == Attr.BG_MAGENTA    return cli::BG_MAGENTA
+    else if attr == Attr.BG_CYAN       return cli::BG_CYAN
+    else if attr == Attr.BG_WHITE      return cli::BG_WHITE
+
+    \die{ "attr not found" }
+    return ""
+}
+
+extern sprintf(char*, char*, ...) : int
+
+proc write_lineno_buf_padding() {
+    padding := str("            ")
+    file.stderr().write(padding)
+    padding.free()
+}
+proc write_lineno_buf(ln : u32, mark : bool) {
+    const side := "║"
+    buf : char[256]
+    if mark {
+        b : char[10]
+        sprintf(b, "=> %d", ln)
+        sprintf(buf, "%10s%s ", b, side)
+    } else {
+        sprintf(buf, "%10d%s ", ln, side)
+    }
+
+    file.stderr().write(buf, cstrlen(buf))
+}
+
+proc write_context_header(cxt : context ref) {
+    s := str("at ")
+    if path : string ref = cxt.file
+        s.append(path)
+    else
+        s.append("???")
+    s.append(" :: ")
+    ln_str := str(cxt.beg.ln as u64)
+    ch_str := str(cxt.beg.ch as u64)
+    s.append(ln_str)
+    s.append(" :: ")
+    s.append(ch_str)
+    s.append('\n')
+
+    strattr(s, get_attr(Attr.BLUE))
+    file.stderr().write(s)
+
+    ch_str.free()
+    ln_str.free()
+}
+
+proc highlight_source_location(cxt : context ref, attr : Attr) {
+    write_context_header(cxt)
+ 
+    f := { file: }
+
+    if path : string ref = cxt.file
+        f = file.open(path.c_str(), file.READ)
+    else
+        \die { "context does not have a path" }
+    
+    if not f.good()    \die{ "could not open file" }
+
+    lines := f.lines()
+
+    # print the 'before' context
+    if cxt.beg.ln < 3 {
+        for i := 0; i < cxt.beg.ln - 1 and i < |lines|; i += 1 {
+            write_lineno_buf(i + 1, false)
+            file.stderr().write(lines[i])
+        }
+    } else {
+        write_lineno_buf(cxt.beg.ln - 2, false)
+        file.stderr().write(lines[cxt.beg.ln - 3])
+        write_lineno_buf(cxt.beg.ln - 1, false)
+        file.stderr().write(lines[cxt.beg.ln - 2])
+    }
+
+    # print the target line
+    if compil.args.no_color {
+        if cxt.beg.ln == cxt.end.ln {
+            write_lineno_buf(cxt.beg.ln, true)
+            file.stderr().write(lines[cxt.beg.ln - 1])
+            write_lineno_buf_padding()
+            for i := 0; i < cxt.beg.ch - 1; i += 1
+                file.stderr().write(" ", 1)
+            len := (cxt.end.ch as i32) - (cxt.beg.ch as i32)
+            len += 1
+            if len <= 0
+                len = 1
+            for i := 0; i < len; i += 1 {
+                if i == 0
+                    file.stderr().write("^", 1)
+                else
+                    file.stderr().write("~", 1)
+            }
+            file.stderr().write("\n", 1)
+        } else {
+            for i := cxt.beg.ln; i <= cxt.end.ln; i += 1 {
+                line := lines[i - 1]
+                write_lineno_buf(i, i == 0)
+                file.stderr().write(line)
+                write_lineno_buf_padding()
+                if i == cxt.beg.ln {
+                    for j := 0; j < cxt.beg.ch - 1; j += 1
+                        file.stderr().write(" ", 1)
+                    for j := cxt.beg.ch; j < line.len() - 1; j += 1 {
+                        if j == cxt.beg.ch
+                            file.stderr().write("^", 1)
+                        else
+                            file.stderr().write("~", 1)
+                    }
+                } else if i == cxt.end.ln {
+                    for j := 0; j < cxt.end.ch; j += 1
+                        file.stderr().write("~", 1)
+                    for j := cxt.end.ch; j < line.len() - 1; j += 1
+                        file.stderr().write(" ", 1)
+                } else {
+                    for j := 0; j < line.len() - 1; j += 1
+                        file.stderr().write("~", 1)
+                }
+                file.stderr().write("\n", 1)
+            }
+        }
+    } else {
+        a    := get_attr(attr)
+        b    := get_attr(Attr.BOLD)
+        u    := get_attr(Attr.UNDERLINE)
+        r    := get_attr(Attr.RESET)
+
+        if cxt.beg.ln == cxt.end.ln {
+            line := lines[cxt.beg.ln - 1]
+            pre  := line.substr(0, cxt.beg.ch - 1)
+            high := line.substr(cxt.beg.ch - 1, cxt.end.ch - cxt.beg.ch + 1)
+            post := line.substr(cxt.end.ch)
+
+            file.stderr().write(a, cstrlen(a))
+            file.stderr().write(b, cstrlen(b))
+            write_lineno_buf(cxt.beg.ln, true)
+            file.stderr().write(r, cstrlen(r))
+            file.stderr().write(pre)
+            file.stderr().write(a, cstrlen(a))
+            file.stderr().write(b, cstrlen(b))
+            file.stderr().write(u, cstrlen(u))
+            file.stderr().write(high)
+            file.stderr().write(r, cstrlen(r))
+            file.stderr().write(post)
+
+            post.free()
+            high.free()
+            pre.free()
+        } else {
+            for i := cxt.beg.ln; i <= cxt.end.ln; i += 1 {
+                line := lines[i - 1]
+                file.stderr().write(a, cstrlen(a))
+                file.stderr().write(b, cstrlen(b))
+                write_lineno_buf(i, i == cxt.beg.ln)
+                file.stderr().write(r, cstrlen(r))
+                if i == cxt.beg.ln {
+                    pre  := line.substr(0, cxt.beg.ch - 1)
+                    high := line.substr(cxt.beg.ch - 1)
+
+                    strattr(high, a, b, u)
+                    file.stderr().write(pre)
+                    file.stderr().write(high)
+
+                    high.free()
+                    pre.free()
+                } else if i == cxt.end.ln {
+                    high := line.substr(0, cxt.end.ch)
+                    post := line.substr(cxt.end.ch)
+
+                    strattr(high, a, b, u)
+                    file.stderr().write(high)
+                    file.stderr().write(post)
+
+                    post.free()
+                    high.free()
+                } else {
+                    file.stderr().write(a, cstrlen(a))
+                    file.stderr().write(b, cstrlen(b))
+                    file.stderr().write(u, cstrlen(u))
+                    file.stderr().write(line)
+                    file.stderr().write(r, cstrlen(r))
+                }
+            }
+        }
+    }
+
+    # print the 'after' context
+    if |lines| - cxt.end.ln < 3 {
+        for i := 0; i < |lines| - cxt.end.ln; i += 1 {
+            write_lineno_buf(cxt.end.ln + i + 1, false)
+            file.stderr().write(lines[cxt.end.ln + i])
+        }
+    } else {
+        write_lineno_buf(cxt.end.ln + 1, false)
+        file.stderr().write(lines[cxt.end.ln])
+        write_lineno_buf(cxt.end.ln + 2, false)
+        file.stderr().write(lines[cxt.end.ln + 1])
+    }
+
+    # file.stderr().write("\n", 1)
+
+    lines.free()
+}
+
+proc error(message : char*) {
+    s := str(message)
+    error(s, true)
+}
+
+proc error(message : string ref, fatal : bool) {
+    output_lock.lock() 
+
+    write_error(message)
+
+    if fatal    { (@compil).abort() }
+    
+    output_lock.unlock() 
+}
+
+proc write_error(message : string ref) {
+    e        := str("Error: ")
+    strattr(e, get_attr(Attr.RED))
+    message' := concat(message.copy(), str("\n"))
+    strattr(message', get_attr(Attr.GREEN))
+
+    file.stderr().write(e)
+    file.stderr().write(message')
+
+    message'.free()
+    e.free()
+}
+
+proc write_warning(message : string ref) {
+    e        := str("Warning: ")
+    strattr(e, get_attr(Attr.MAGENTA))
+    # message' := concat(message.copy(), str('\n'))
+    message' := str()
+    message'.append(message.copy())
+    message'.append('\n')
+    strattr(message', get_attr(Attr.GREEN))
+
+    file.stderr().write(e)
+    file.stderr().write(message')
+
+    message'.free()
+    e.free()
+}
+
+proc report_phase_time(phase : char*, ms : u64, attr : Attr) {
+    time_str := { string: }
+
+    if ms < 1000 {
+        time_str = str(ms)
+        time_str.append("ms")
+    } else {
+        time_str = str((ms as f32) / 1000.0)
+        time_str.append("s")
+    }
+
+    line := concat(str(phase), str(": "), time_str)
+    line.append('\n')
+    strattr(line, get_attr(attr))
+    output_lock.lock()
+
+    file.stdout().write(line)
+    
+    output_lock.unlock()
+    line.free()
+}
+
+proc report_phase_time(phase : char*, ms : u64, attr1 : Attr, attr2 : Attr) {
+    time_str := { string: }
+
+    if ms < 1000 {
+        time_str = str(ms)
+        time_str.append("ms")
+    } else {
+        time_str = str((ms as f32) / 1000.0)
+        time_str.append("s")
+    }
+
+    line := concat(str(phase), str(": "), time_str)
+    line.append('\n')
+    strattr(line, get_attr(attr1))
+    strattr(line, get_attr(attr2))
+    output_lock.lock()
+
+    file.stdout().write(line)
+    
+    output_lock.unlock()
+    line.free()
+}
+
+proc report_lines_per_s(total_lines : u64, code_lines : u64, ms : u64, attr1 : Attr, attr2 : Attr) {
+    total_rate := { string: }
+    code_rate  := { string: }
+
+    s : f32 = (ms as f32) / 1000.0
+
+    if ms == 0 {
+        total_rate = str("inf")
+        code_rate  = str("inf")
+    } else {
+        total_rate = str(((total_lines as f32) / s) as i64)
+        code_rate  = str(((code_lines as f32) / s) as i64)
+    }
+    
+    line1 := concat(str(total_lines), str(" lines of text @ "), total_rate, str(" lines/s"))
+    line1.append('\n')
+    line2 := concat(str(code_lines),  str(" lines of code @ "), code_rate,  str(" lines/s"))
+    line2.append('\n')
+
+    strattr(line1, get_attr(attr1))
+    strattr(line1, get_attr(attr2))
+    strattr(line2, get_attr(attr1))
+    strattr(line2, get_attr(attr2))
+
+    output_lock.lock()
+
+    file.stdout().write(line1)
+    file.stdout().write(line2)
+    
+    output_lock.unlock()
+
+    line2.free()
+    line1.free()
+}
+
+proc report_bytes_per_s(n_bytes : u64, ms : u64, attr1 : Attr, attr2 : Attr) {
+    pretty_rate := { string: }
+
+    s : f32 = (ms as f32) / 1000.0
+
+    if ms == 0 {
+        pretty_rate = str("inf b")
+    } else {
+        rate        := ((n_bytes as f32) / s) as u64
+        pretty_rate  = pretty_bytes(rate)
+    }
+
+    pretty_rate.append("/s")
+   
+    pretty_n := pretty_bytes(n_bytes)
+
+    line := concat(pretty_n, str(" @ "), pretty_rate)
+    line.append('\n')
+
+    strattr(line, get_attr(attr1))
+    strattr(line, get_attr(attr2))
+
+    output_lock.lock()
+
+    file.stdout().write(line)
+    
+    output_lock.unlock()
+
+    line.free()
+}
+
+proc report_peak_rss(mem_used : u64, ms : u64, attr1 : Attr, attr2 : Attr) {
+    pretty_mem := pretty_bytes(mem_used)
+    line       := concat(str("Max memory usage: "), pretty_mem)
+    line.append('\n')
+
+    strattr(line, get_attr(attr1))
+    strattr(line, get_attr(attr2))
+
+    output_lock.lock()
+
+    file.stdout().write(line)
+    
+    output_lock.unlock()
+
+    line.free()
+}
+
+
+# move this to a std module?
+import "math.bjou"
+proc pretty_bytes(n_bytes : u64) : string {
+    using math
+
+    suffixes := { "B", "KB", "MB", "GB", "TB", "PB", "EB" }
+    s        := 0
+    count    := n_bytes as f64
+
+    while count >= 1024
+    and   s < 7 {
+        s += 1
+        count /= 1024
+    }
+
+    r := { string: }
+
+    if count - floor(count) == 0.0
+        r = str(count as u64)
+    else
+        r = str(count, 1)
+
+    r.append(suffixes[s])
+
+    return r
+}
