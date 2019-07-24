@@ -1,0 +1,9 @@
+# hash_functions.bjou
+
+module hash_functions
+
+
+using import "hash.bjou"
+
+
+type str_hasher { const hash : <(string) : u64> = hash::hash }

@@ -1,0 +1,249 @@
+# scope.bjou
+
+module scope
+
+
+using import "hash_table.bjou"
+using import "pair.bjou"
+using import "bucket_array.bjou"
+using import "thread.bjou"
+
+
+using import "hash_functions.bjou"
+using import "ast.bjou"
+using import "ui.bjou"
+using import "debug.bjou"
+using import "utils.bjou"
+
+type symbol_table = hash_table$(string, astref, str_hasher)
+
+type overload_set {
+    procs : astref[...]
+
+
+    proc create() : overload_set {
+        return { overload_set:
+            .procs = [...astref]
+        }
+    }
+}
+type overload_table  = hash_table$(string, overload_set, str_hasher)
+
+type scope {
+    is_module   : bool
+    module_name : string
+    sub_scopes  : scope[...]
+    symbols     : symbol_table
+    overloads   : overload_table
+
+   
+    proc create_common() : scope {
+        return { scope:
+            .sub_scopes  = [...scope],
+            .symbols     = symbol_table.create(),
+            .overloads   = overload_table.create(),
+        }
+    }
+
+    proc create(module_name : string ref) : scope {
+        r := scope.create_common()
+        r.is_module   = true
+        r.module_name = module_name.copy()
+
+        return r
+    }
+
+    proc create() : scope {
+        r := scope.create_common()
+        r.is_module   = false
+        r.module_name = str()
+
+        return r
+    }
+
+    # @libc
+    proc show(this, indent_level : u32) {
+        printf("%*s", 4 * indent_level, "")
+        if this.is_module {
+            printf("module %s ", this.module_name.c_str())
+        }
+        printf("{\n")
+        indent_level += 1
+        for it := this.symbols.iter(); not it.is_end(); it.next() {
+            printf("%*s", 4 * indent_level, "")
+            printf("%s", it.val().first.c_str())
+            if it.val().second.is_none() {
+                if overload_search : pair$(string ref, overload_set ref) = this.overloads.lookup(it.val().first) {
+                    printf(" (%d overloads)", |overload_search.second.procs|)
+                } else debug_assert(false, "overload set not found")
+            }
+            printf("\n")
+        }
+
+        if |this.sub_scopes| {
+            printf("\n")
+        }
+
+        foreach ref sub in this.sub_scopes {
+            sub.show(indent_level)
+        }
+        indent_level -= 1
+        printf("%*s}\n", 4 * indent_level, "")
+    }
+}
+
+type module_scope_table = hash_table$(string, i32, str_hasher)
+
+type globalscope extends scope {
+    module_scopes : module_scope_table
+    
+    
+    proc create() : globalscope {
+        return { globalscope:
+            .sub_scopes         = [...scope],
+            .symbols            = symbol_table.create(),
+            .overloads          = overload_table.create(),
+            .is_module          = false,
+            .module_name        = str(),
+            .module_scopes      = module_scope_table.create(),
+        }
+    }
+
+    proc get_module_scope_by_idx(this, idx : i32) : scope ref {
+        module_scope := this.sub_scopes[idx]
+        debug_assert(module_scope.is_module, "not a module scope")
+
+        return module_scope
+    }
+
+    proc get_or_add_module_scope_idx(this, module_name : string ref) : i32 {
+        if search : pair$(string ref, i32 ref) = this.module_scopes.lookup(module_name) {
+            return search.second
+        }
+
+        new_module_scope := scope.create(module_name)
+        idx              := |this.sub_scopes|
+        this.sub_scopes.push(new_module_scope)
+        this.module_scopes.insert(new_module_scope.module_name, idx)
+
+        return idx
+    }
+
+    proc show(this) {
+        printf("global scope ")
+        scope.show(this, 0)
+    }
+}
+
+proc add_nodes_to_top_level_scope(global_scope : globalscope ref, nodes : bucket_array$astref ref) {
+    for it := nodes.iter(); not it.is_end(); it.next() {
+        m_node := it.val()
+        if node : ast ref = m_node {
+            add_single_node_to_top_level_scope(global_scope, node)
+        }
+    }
+}
+
+proc add_single_node_to_top_level_scope(global_scope : globalscope ref, node : ast ref) {
+    if decl : declaration = node {
+        module_idx := unsafe_baseref(node).module_idx
+        if module_idx == -1 {
+            add_to_scope(global_scope, node)
+        } else {
+            module_scope := global_scope.get_module_scope_by_idx(module_idx)
+            add_to_scope(module_scope, node)
+        }
+        if ty_def : typedef = node {
+            add_typedef_declarations_to_top_level_scope(global_scope, ty_def)
+        }
+    } else if inc : includestmt = node {
+        if inc_container : include_container ref = inc.container {
+            add_nodes_to_top_level_scope(global_scope, inc_container.nodes)
+        } else debug_assert(false, "missing include_container for includestmt")
+    }
+}
+
+proc add_typedef_declarations_to_top_level_scope(global_scope : globalscope ref, ty_def : typedef) {
+    foreach child in ty_def.declarations {
+        child_node : ast ref = unsafe_ast_ref(child)
+        if field : vardecl = child_node {
+            # Don't add symbols for variable fields.
+        } else if child_decl : declaration = child_node {
+            child_decl.name       = concat(ty_def.name.copy(), str("."), child_decl.name)
+            child_decl.module_idx = ty_def.module_idx
+            add_single_node_to_top_level_scope(global_scope, child_node)
+        } else debug_assert(false, "what kind of node is in this typedef?")
+    }
+}
+
+proc add_to_scope(s : scope ref, node : ast ref) {
+    if decl : declaration = node {
+
+        if s.is_module {
+            decl.name = concat(s.module_name.copy(), str("::"), decl.name)
+        }
+
+        if search : pair$(string ref, astref ref) = s.symbols.lookup(decl.name) {
+            if ex : ast ref = search.second {
+                # @unsafe
+                # This is the only procedure in which an astref can be
+                # added to s.symbols and it is checked before insertion.
+                if ex_decl : declaration = unsafe_ast_ref(search.second) {
+                    if not can_be_overload(node) {
+                        redefinition_error(decl.name, decl, ex_decl)
+                    }
+
+                    init_overload(s, decl.name, ex, node)
+
+                } else debug_assert(false, "not a declaration")
+            } else {
+                # Already an overloaded procedure moved to overloads.
+                add_overload(s, decl.name, node)
+            }
+        } else {
+            # Normal symbol.
+            # The symbol table is taking ownership of 'name'.
+            s.symbols.insert(decl.name, node)
+        }
+
+    } else debug_assert(false, "not a declaration")
+}
+
+proc init_overload(s : scope ref, name : string ref, existing_proc : ast ref, new_proc : ast ref) {
+    # Make a new overload_set and move symbols to it.
+    # The overload_table is taking ownership of 'name'.
+    
+    inserted := s.overloads.insert(name, overload_set.create())
+    inserted.second.procs.push(existing_proc)
+    inserted.second.procs.push(new_proc)
+
+    # Mark the symbol table entry as an overload by replacing the
+    # ast ref with 'nothing'.
+    s.symbols.insert(name, nothing)
+}
+
+proc add_overload(s : scope ref, name : string ref, new_proc : ast ref) {
+    if search : pair$(string ref, overload_set ref) = s.overloads.lookup(name) {
+        search.second.procs.push(new_proc)
+    } else debug_assert(false, "missing overload set")
+}
+
+proc can_be_overload(node : ast ref) : bool {
+    is_overloadable := false
+    if      p   : procdef         = node    { is_overloadable = true }
+    else if t_p : templateprocdef = node    { is_overloadable = true }
+
+    return is_overloadable
+}
+
+proc redefinition_error(name : string ref, decl : declaration ref, ex : declaration ref) {
+    err_str := str("Redefinition of '")
+    err_str.append(name)
+    err_str.append("'.")
+
+    ui::error_builder.create()
+        .with_message(err_str.c_str())
+        .add_location(decl.name_cxt)
+        .add_location("Previous declaration:", ex.name_cxt)
+        .report()
+}

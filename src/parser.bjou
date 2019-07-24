@@ -34,7 +34,7 @@ type parser {
     fe                  : frontend ref
     all_nodes           : bucket_array$ast
     top_level_nodes     : bucket_array$astref
-    path                : string
+    path                : string ref
     f                   : file
     buff                : char[]
     buff_ptr            : char*
@@ -45,6 +45,7 @@ type parser {
     n_bytes             : u64
     inc_container       : (include_container ref | none)
     introduction_cxt    : context
+    module_idx          : i32
 
 
     proc init(this, f : file, kind : parserkind) {
@@ -52,11 +53,11 @@ type parser {
         this.all_nodes           = bucket_array$ast.create()
         this.top_level_nodes     = bucket_array$astref.create()
         this.f                   = f
-        this.path                = str(this.f.path)
+        this.module_idx          = -1
     }
 
-    proc create(fe : frontend ref, f : file, kind : parserkind) : parser {
-        r := { parser: .fe = fe }
+    proc create(fe : frontend ref, path : string ref, f : file, kind : parserkind) : parser {
+        r := { parser: .fe = fe, .path = path }
         r.init(f, kind)
 
         return r
@@ -64,9 +65,11 @@ type parser {
 
     proc free(this) {
         delete this.buff_ptr
-        this.path.free()
 
         this.f.close()
+
+        this.all_nodes.free()
+        this.top_level_nodes.free()
 
         # async_parsers clean up themselves.
         if not this.pool.is_none() {
@@ -93,13 +96,28 @@ type parser {
             if node.is_none() {
                 this.error_on_next_token("Unexpeced token.")
             } else {
+                # @unsafe
+                # We just checked that it wasn't none above.
+                unsafe_baseref(node).module_idx = this.module_idx               
+
                 this.top_level_nodes.push(node)
             }
         }
         
         end := measure_time_now_ms()
 
-        this.transfer_to_fe()
+        if compil.args.syntax_only {
+            if not this.pool.is_none() { this.fe.node_lock.lock() }
+        
+            this.fe.n_files       += 1
+            this.fe.n_lines       += this.n_lines
+            this.fe.n_blank_lines += this.n_blank_lines
+            this.fe.n_bytes       += this.n_bytes
+            
+            if not this.pool.is_none() { this.fe.node_lock.unlock() }
+        } else {
+            this.transfer_to_fe()
+        }
 
         if  compil.args.stats
         and not compil.args.stats_no_files {
@@ -149,7 +167,7 @@ type parser {
         } else {
             this.fe.top_level_nodes = bucket_array::merge_and_steal_data(this.fe.top_level_nodes, this.top_level_nodes)
         }
-       
+
         if not this.pool.is_none() { this.fe.node_lock.unlock() }
     }
 
@@ -236,9 +254,11 @@ type parser {
         }
 
         result    := constantdecl.create()
-        result.cxt = result.name_cxt = context.from(this.cur_cxt)
+        result.cxt = context.from(this.cur_cxt)
       
         this.eat(5) # 'const'
+
+        result.name_cxt = context.from(this.cur_cxt)
 
         this.expect$identifier(result.name, "constant name")
         result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
@@ -578,17 +598,23 @@ type parser {
                 .report()
         }
 
+        if pool : threadpool ref = this.pool {
+            this.module_idx = this.fe.add_new_module_scope_locked(result.ident)
+        } else {
+            this.module_idx = this.fe.add_new_module_scope(result.ident)
+        }
+
         return add(this.all_nodes, result)
     }
 
     proc launch_import(this, path : string ref, intro_cxt : context ref) {
-        f        := open_file(path, search_paths: true)
+        f        := open_file(path, search_paths: true, intro_cxt)
         new_path := str(f.path)
 
         if pool : threadpool ref = this.pool {
-            if this.fe.first_encounter_of_file_locked(new_path) {
+            if stored_path : string ref = this.fe.first_encounter_of_file_locked(new_path) {
                 p                 := new async_parser
-                @p                 = async_parser.create(this.fe, pool, f, kind: parserkind.IMPORT)
+                @p                 = async_parser.create(this.fe, pool, stored_path, f, kind: parserkind.IMPORT)
                 p.introduction_cxt = intro_cxt
 
                 pool.add_task(async_parser_wrapper, p)
@@ -596,10 +622,10 @@ type parser {
 
             new_path.free()
         } else {
-            if this.fe.first_encounter_of_file(new_path) {
+            if stored_path : string ref = this.fe.first_encounter_of_file(new_path) {
                 new_path.free()
 
-                p := parser.create(this.fe, f, kind: parserkind.IMPORT)
+                p := parser.create(this.fe, stored_path, f, kind: parserkind.IMPORT)
                 p.introduction_cxt = intro_cxt
                 p.go()
             }
@@ -607,34 +633,36 @@ type parser {
     }
 
     proc launch_include(this, path : string ref, container : include_container ref, intro_cxt : context ref) {
-        f        := open_file(path, search_paths: true)
+        f        := open_file(path, search_paths: true, intro_cxt)
         new_path := str(f.path)
 
         if pool : threadpool ref = this.pool {
-            if not this.fe.first_encounter_of_file_locked(new_path) {
+            if stored_path : string ref = this.fe.first_encounter_of_file_locked(new_path) {
+                new_path.free()
+
+                p                 := new async_parser
+                @p                 = async_parser.create(this.fe, pool, stored_path, f, kind: parserkind.INCLUDE)
+                p.inc_container    = container
+                p.introduction_cxt = intro_cxt
+                p.module_idx       = this.module_idx
+                    
+                pool.add_task(async_parser_wrapper, p)
+            } else {
                 frontend::multiple_include_error(path, intro_cxt)
             }
-
-            new_path.free()
-
-            p                 := new async_parser
-            @p                 = async_parser.create(this.fe, pool, f, kind: parserkind.INCLUDE)
-            p.inc_container    = container
-            p.introduction_cxt = intro_cxt
-                
-            pool.add_task(async_parser_wrapper, p)
         } else {
-            if not this.fe.first_encounter_of_file(new_path) {
+            if stored_path : string ref = this.fe.first_encounter_of_file(new_path) {
+                new_path.free()
+
+                p                 := parser.create(this.fe, stored_path, f, kind: parserkind.INCLUDE)
+                p.inc_container    = container
+                p.introduction_cxt = intro_cxt
+                p.module_idx       = this.module_idx
+
+                p.go()
+            } else {
                 frontend::multiple_include_error(path, intro_cxt)
             }
-            
-            new_path.free()
-
-            p                 := parser.create(this.fe, f, kind: parserkind.INCLUDE)
-            p.inc_container    = container
-            p.introduction_cxt = intro_cxt
-
-            p.go()
         }
     }
 
@@ -656,7 +684,9 @@ type parser {
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        this.launch_import(result.path, intro_cxt)
+        if not compil.args.syntax_only {
+            this.launch_import(result.path, intro_cxt)
+        }
 
         r := add(this.all_nodes, result)
 
@@ -702,14 +732,16 @@ type parser {
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        if this.pool.is_none() {
-            ic := this.fe.get_next_include_container()
-            result.container = ic
-            this.launch_include(result.path, ic, intro_cxt)
-        } else {
-            ic := this.fe.get_next_include_container_locked()
-            result.container = ic
-            this.launch_include(result.path, ic, intro_cxt)
+        if not compil.args.syntax_only {
+            if this.pool.is_none() {
+                ic := this.fe.get_next_include_container()
+                result.container = ic
+                this.launch_include(result.path, ic, intro_cxt)
+            } else {
+                ic := this.fe.get_next_include_container_locked()
+                result.container = ic
+                this.launch_include(result.path, ic, intro_cxt)
+            }
         }
 
         r := add(this.all_nodes, result)
@@ -2207,8 +2239,8 @@ type async_parser extends parser {
         parser.init(this, f, kind)
     }
     
-    proc create(fe : frontend ref, pool : threadpool ref, f : file, kind : parserkind) : async_parser {
-        r := { async_parser: .fe = fe, .pool = pool }
+    proc create(fe : frontend ref, pool : threadpool ref, path : string ref, f : file, kind : parserkind) : async_parser {
+        r := { async_parser: .fe = fe, .pool = pool, .path = path }
         r.init(f, kind)
 
         return r

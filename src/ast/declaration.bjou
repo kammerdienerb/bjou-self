@@ -1,9 +1,12 @@
 # declaration.bjou
 
 abstract type declaration extends typed {
-    name_cxt : context
-    name     : string
+    name_cxt  : context
+    name      : string
 
 
-    proc init(this) { typed.init(this) }
+    proc init(this) {
+        typed.init(this)
+        this.name      = str()
+    }
 }

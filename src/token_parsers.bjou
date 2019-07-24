@@ -5,103 +5,40 @@ module token_parsers
 const MIN_WORD_LENGTH := 2 
 const MAX_WORD_LENGTH := 13
 
-kwds := { 
-    "type",
-    "abstract",
-    "extends",
-    "enum",
-    "print",
-    "delete",
-    "module",
-    "import",
-    "include",
-    "using",
-    "This",
-    "ref",
-    "return",
-    "if",
-    "else",
-    "while",
-    "do",
-    "for",
-    "foreach",
-    "in",
-    "break",
-    "continue",
-    "true",
-    "false",
-    "nothing",
-    "as",
-    "sizeof",
-    "not",
-    "new",
-    "proc",
-    "__no_mangle__",
-    "__inline__",
-    "extern",
-    "some",
-    "bneg",
-    "and",
-    "or",
-    "bshl",
-    "bshr",
-    "band",
-    "bxor",
-    "bor"
-}
+kwds   : char*[][14]
+kwds_2  := { "as", "do", "if", "in", "or" }
+kwds_3  := { "and", "bor", "for", "new", "not", "ref" }
+kwds_4  := { "Type", "band", "bneg", "bshl", "bshr", "bxor", "else", "enum", "proc", "some", "true", "type" }
+kwds_5  := { "break", "false", "print", "using", "while" }
+kwds_6  := { "delete", "extern", "import", "module", "return", "sizeof" }
+kwds_7  := { "extends", "foreach", "include", "nothing" }
+kwds_8  := { "abstract", "continue" }
+kwds_10 := { "__inline__" }
+kwds_13 := { "__no_mangle__" }
 
-kwd_lens := { 
-    4, #"type",
-    8, #"abstract",
-    7, #"extends",
-    4, #"enum",
-    5, #"print",
-    6, #"delete",
-    6, #"module",
-    6, #"import",
-    7, #"include",
-    5, #"using",
-    4, #"This",
-    3, #"ref",
-    6, #"return",
-    2, #"if",
-    4, #"else",
-    5, #"while",
-    2, #"do",
-    3, #"for",
-    7, #"foreach",
-    2, #"in",
-    5, #"break",
-    8, #"continue",
-    4, #"true",
-    5, #"false",
-    7, #"nothing",
-    2, #"as",
-    6, #"sizeof",
-    3, #"not",
-    3, #"new",
-    4, #"proc",
-    13,#"__no_mangle__",
-    10,#"__inline__",
-    6, #"extern",
-    4, #"some",
-    4, #"bneg",
-    3, #"and",
-    2, #"or",
-    4, #"bshl",
-    4, #"bshr",
-    4, #"band",
-    4, #"bxor",
-    3, #"bor"
+proc init_kwd_array() {
+    kwds[0]  = [ NULL as char** , 0:0         ]
+    kwds[1]  = [ NULL as char** , 0:0         ]
+    kwds[2]  = [ kwds_2         , 0:|kwds_2|  ]
+    kwds[3]  = [ kwds_3         , 0:|kwds_3|  ]
+    kwds[4]  = [ kwds_4         , 0:|kwds_4|  ]
+    kwds[5]  = [ kwds_5         , 0:|kwds_5|  ]
+    kwds[6]  = [ kwds_6         , 0:|kwds_6|  ]
+    kwds[7]  = [ kwds_7         , 0:|kwds_7|  ]
+    kwds[8]  = [ kwds_8         , 0:|kwds_8|  ]
+    kwds[9]  = [ NULL as char** , 0:0         ]
+    kwds[10] = [ kwds_10        , 0:|kwds_10| ]
+    kwds[11] = [ NULL as char** , 0:0         ]
+    kwds[12] = [ NULL as char** , 0:0         ]
+    kwds[13] = [ kwds_13        , 0:|kwds_13| ]
 }
 
 proc is_kwd(str : char*, len : u64) : char* {
     if len >= MIN_WORD_LENGTH and len <= MAX_WORD_LENGTH {
-        for i := 0; i < |kwds|; i += 1 {
-            kwd := kwds[i]
+        for i := 0; i < |kwds[len]|; i += 1 {
+            kwd := kwds[len][i]
 
             if  @str == @kwd
-            and len  == kwd_lens[i]
             and cstrncmp(str + 1, kwd + 1, len - 1) == 0 {
                 return kwd
             }
@@ -110,7 +47,6 @@ proc is_kwd(str : char*, len : u64) : char* {
 
     return NULL as char*
 }
-
 
 proc text_match_parser(text : char*, buff : char[] ref, dst : (string ref | none)) : int {
     p  := 0u64

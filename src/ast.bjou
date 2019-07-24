@@ -11,6 +11,8 @@ using import "utils.bjou"
 using import "ty.bjou"
 
 proc __inline__ add(array : bucket_array$ast ref, node : ast ref) : astref {
+    debug_assert(not node.is_none(),
+        "trying to allocate a \"nothing\" node in the bucket_array")
     return array.push(node)
 }
 
@@ -25,23 +27,25 @@ proc __inline__ get_next_node_slot(array : bucket_array$ast ref) : astref {
 type ast_flag_t = u64
 
 abstract type astbase {
-    flags    : u32
-    cxt      : context
+    flags      : u32
+    cxt        : context
+    module_idx : i32
 
 
     proc init(this) {
-        this.flags = 0
+        this.flags      = 0
+        this.module_idx = -1
     }
 
-    proc set_flag(this, flag : ast_flag) {
+    proc __inline__ set_flag(this, flag : ast_flag) {
         this.flags = this.flags bor (1u64 bshl (flag as ast_flag_t))
     }
 
-    proc clear_flag(this, flag : ast_flag) {
+    proc __inline__ clear_flag(this, flag : ast_flag) {
         this.flags = this.flags band bneg (1u64 bshl (flag as ast_flag_t))
     }
 
-    proc get_flag(this, flag : ast_flag) : bool {
+    proc __inline__ get_flag(this, flag : ast_flag) : bool {
         return this.flags band (1u64 bshl (flag as ast_flag_t))
     }
 }
@@ -238,14 +242,6 @@ enum ast_flag {
     IS_DESTRUCTURE,
     FOREACH_TAKE_REF,
     TYPE_ALIAS
-}
-
-proc visit$visitor_data_T(node    : astref,
-                          visitor : <(astref, visitor_data_T)>,
-                          data    : visitor_data_T) {
-    if node' : ast ref = node {
-        if x : procdef = node' { x.visit(visitor, data) }
-    }
 }
 
 proc unsafe_baseref(this : ast ref) : astbase ref {

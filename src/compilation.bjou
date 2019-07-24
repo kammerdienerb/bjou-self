@@ -35,6 +35,9 @@ type compilation {
 
     proc go(this) {
         this.front.go()
+        if this.args.front or this.args.syntax_only {
+            return
+        }
         this.back.go()
     }
 

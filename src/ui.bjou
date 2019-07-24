@@ -23,10 +23,13 @@ type argset {
     symbols        : bool
     stats          : bool
     stats_no_files : bool
+    dump_symbols   : bool
     front          : bool
+    syntax_only    : bool
     verbose        : bool
 
     version        : bool
+    seahorse       : bool
     help           : bool
 
     # values
@@ -79,9 +82,12 @@ type argset {
         print        "symbols        = %", this.symbols
         print        "stats          = %", this.stats
         print        "stats-no-files = %", this.stats_no_files
+        print        "dump-symbols   = %", this.dump_symbols
         print        "front          = %", this.front
+        print        "syntax_only    = %", this.syntax_only
         print        "verbose        = %", this.verbose
         print        "version        = %", this.version
+        print        "seahorse       = %", this.seahorse
         print        "help           = %", this.help
         print        "threads        = %", this.threads
         print        "mfeat          = '%'", this.mfeat.c_str()
@@ -222,7 +228,10 @@ type error_builder extends error_builder_base {
                 msg'.free()
             }
             highlight_source_location(loc.1, Attr.RED)
+       
+            if &loc != &this.locations.back()    { file.stderr().write("\n", 1) }
         }
+
         foreach ref note in this.notes {
             note'  := note.copy()
             strattr(note', get_attr(Attr.GREEN))
@@ -233,7 +242,11 @@ type error_builder extends error_builder_base {
             note''.free()
             note'.free()
         }
-        file.stderr().write("\n", 1)
+
+        if |this.locations| > 0
+        or |this.notes|     > 0 {
+            file.stderr().write("\n", 1)
+        }
 
         if this.fatal    { (@compil).abort() }
         
@@ -288,6 +301,7 @@ type warning_builder extends error_builder_base {
             }
             highlight_source_location(loc.1, Attr.MAGENTA)
         }
+
         foreach ref note in this.notes {
             note'  := note.copy()
             strattr(note', get_attr(Attr.GREEN))
@@ -298,7 +312,11 @@ type warning_builder extends error_builder_base {
             note''.free()
             note'.free()
         }
-        file.stderr().write("\n", 1)
+        
+        if |this.locations| > 0
+        or |this.notes|     > 0 {
+            file.stderr().write("\n", 1)
+        }
         
         output_lock.unlock()    
 
@@ -422,7 +440,7 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
     
     if not f.good()    \die{ "could not open file" }
 
-    lines := f.lines()
+    lines := f.lines(cxt.end.ln + 3)
 
     # print the 'before' context
     if cxt.beg.ln < 3 {

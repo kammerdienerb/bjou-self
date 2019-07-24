@@ -1,5 +1,8 @@
 # bjou.bjou
 
+# const A := 1
+# const A := 1
+
 main()
 
 import "__preload.bjou"
@@ -17,25 +20,14 @@ using import "globals.bjou"
 using import "operator.bjou"
 using import "context.bjou"
 
-
 proc main() {
     main_init()
 
     arg_parser := ArgParser.create(env.args()[0].c_str())
     args       := ui::argset.create()
 
-    if not parse_arguments(arg_parser, args) {
-        return
-    }
-
-    if args.version {
-        if BJOU_DEBUG    { print "bJou (debug) version %.%", VER_MAJ, VER_MIN }
-        else             { print "bJou version %.%", VER_MAJ, VER_MIN         }
-        return
-    }
-    if args.help {
-        help := arg_parser.help()
-        print "%", help.c_str()
+    if not parse_arguments(arg_parser, args)
+    or handle_early_exit_args(arg_parser, args) {
         return
     }
 
@@ -78,8 +70,12 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
                         .withDesc("Print compilation statistics to STDOUT.")
     stats_no_files := arg_parser.addSwitch("stats-no-files")
                         .withDesc("When printing stats, don't print parse times of every file.")
+    dump_symbols   := arg_parser.addSwitch("dump-symbols")
+                        .withDesc("Print the scope/symbol layout to STDOUT.")
     front          := arg_parser.addSwitch("front")
                         .withDesc("Only run the front end of the compiler.")
+    syntax_only    := arg_parser.addSwitch("syntax-only")
+                        .withDesc("Only run the parser on the input files.")
     verbose        := arg_parser.addSwitch('v', "verbose")
                         .withDesc("Print the LLVM IR to STDOUT.")
     mfeat          := arg_parser.addValueString("mfeat")
@@ -92,6 +88,8 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
                         .withDesc("Add the name of a library to link.")
     output         := arg_parser.addValueString('o', "output")
                         .withDesc("Specify the name of the target output file.")
+    seahorse       := arg_parser.addSwitch("seahorse")
+                        .withDesc("Display the seahorse logo and exit.")
     version        := arg_parser.addSwitch("version")
                         .withDesc("Display version info and exit.")
     help           := arg_parser.addSwitch('h', "help")
@@ -121,9 +119,12 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
     args.symbols        = symbols.set
     args.stats          = stats.set
     args.stats_no_files = stats_no_files.set
+    args.dump_symbols   = dump_symbols.set
     args.front          = front.set
+    args.syntax_only    = syntax_only.set
     args.verbose        = verbose.set
     args.version        = version.set
+    args.seahorse       = seahorse.set
     args.help           = help.set
     if n_threads : int ref = threads.value()
         args.threads = n_threads
@@ -150,7 +151,36 @@ proc main_init() {
     output_lock = mutex.create()
     seedrand(time(NULL as time_t*))
 
+    init_kwd_array()
     init_parse_table()
     init_get_ch_val_escape_map()
     init_op_table()
+}
+
+proc handle_early_exit_args(arg_parser : ArgParser ref, args : ui::argset ref) : bool {
+    early_exit := false
+    if args.seahorse {
+        print_seahorse_logo(args.no_color)
+        early_exit = true
+    }
+    if args.version {
+        if BJOU_DEBUG    { print "bJou (debug) version %.%", VER_MAJ, VER_MIN }
+        else             { print "bJou version %.%", VER_MAJ, VER_MIN         }
+        early_exit = true
+    }
+    if args.help {
+        help := arg_parser.help()
+        print "%", help.c_str()
+        early_exit = true
+    }
+    return early_exit
+}
+
+proc print_seahorse_logo(no_color : bool) {
+    logo_str := str(globals::seahorse_logo)
+    if not no_color {
+        ui::strattr(logo_str, get_attr(ui::Attr.CYAN))
+    }
+    print "%", logo_str.c_str()
+    logo_str.free()
 }

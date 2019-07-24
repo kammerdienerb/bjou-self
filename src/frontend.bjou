@@ -9,16 +9,16 @@ using import "bucket_array.bjou"
 using import "io.bjou"
 using import "hash_table.bjou"
 using import "hash_set.bjou"
-using import "hash.bjou"
 using import "pair.bjou"
 
-type str_hasher { const hash : <(string) : u64> = hash::hash }
 
 using import "globals.bjou"
 using import "compilation.bjou"
 using import "ast.bjou"
 using import "utils.bjou"
 using import "parser.bjou"
+using import "hash_functions.bjou"
+using import "scope.bjou"
 
 
 type frontend {
@@ -29,12 +29,13 @@ type frontend {
     all_nodes          : bucket_array$ast
     top_level_nodes    : bucket_array$astref
     include_containers : bucket_array$include_container
-    files_seen         : string[...]
-    # files_seen         : hash_set$(string, str_hasher)
+    files_seen         : hash_set$(string, str_hasher)
+    global_scope       : globalscope
 
-    node_lock : mutex
+    node_lock              : mutex
     include_container_lock : mutex
     files_seen_lock        : mutex
+    global_scope_lock      : mutex
 
 
     proc create() : frontend {
@@ -42,11 +43,12 @@ type frontend {
             .node_lock              = mutex.create(),
             .include_container_lock = mutex.create(),
             .files_seen_lock        = mutex.create(),
+            .global_scope_lock      = mutex.create(),
             .all_nodes              = bucket_array$ast.create(),
             .include_containers     = bucket_array$include_container.create(),
             .top_level_nodes        = bucket_array$astref.create(),
-            .files_seen             = [...string],
-            # .files_seen             = hash_set$(string, str_hasher).create(),
+            .files_seen             = hash_set$(string, str_hasher).create(),
+            .global_scope           = globalscope.create(),
         }
     }
 
@@ -54,7 +56,22 @@ type frontend {
         beg := measure_time_now_ms()
 
         # do work
+        this.do_parsing()
+        if compil.args.syntax_only {
+            return
+        }
+        this.do_symbols()
 
+        end := measure_time_now_ms()
+
+        if compil.args.stats {
+            using ui
+            ms := end - beg
+            report_phase_time("Front-end", ms, Attr.GREEN)
+        }
+    }
+
+    proc do_parsing(this) {
         parse_beg := measure_time_now_ms()
         if compil.args.no_parallel {
             this.parse_serial()
@@ -71,24 +88,6 @@ type frontend {
             report_phase_time(phase_str.c_str(), ms, Attr.YELLOW)
             phase_str.free()
         }
-
-        # symbol_table := hash_table$(string, astref, str_hasher).create()
-        # for it := this.top_level_nodes.iter(); not it.is_end(); it.next() {
-        #     m_node := it.val()
-        #     if node : ast ref = m_node {
-        #         if decl : declaration = node {
-        #             symbol_table.insert(decl.name, node)
-        #         }
-        #     }
-        # }
-
-        end := measure_time_now_ms()
-
-        if compil.args.stats {
-            using ui
-            ms := end - beg
-            report_phase_time("Front-end", ms, Attr.GREEN)
-        }
     }
 
     proc parse_serial(this) {
@@ -96,8 +95,8 @@ type frontend {
             f        := open_file(path, search_paths: false)
             new_path := str(f.path)
 
-            if this.first_encounter_of_file(new_path) {
-                p := parser.create(this, f, kind: parserkind.IMPORT)
+            if stored_path : string ref = this.first_encounter_of_file(new_path) {
+                p := parser.create(this, stored_path, f, kind: parserkind.IMPORT)
                 p.go()
             } else {
                 input_repeat_error(path)
@@ -119,9 +118,9 @@ type frontend {
             new_path := str(f.path)
 
         
-            if this.first_encounter_of_file_locked(new_path) {
+            if stored_path : string ref = this.first_encounter_of_file_locked(new_path) {
                 p := new async_parser
-                @p = async_parser.create(this, pool, f, kind: parserkind.INPUT_FILE)
+                @p = async_parser.create(this, pool, stored_path, f, kind: parserkind.INPUT_FILE)
                 pool.add_task(async_parser_wrapper, p)
             } else {
                 input_repeat_error(path)
@@ -135,11 +134,56 @@ type frontend {
         pool.free()
     }
 
+    proc do_symbols(this) {
+        symbols_beg := measure_time_now_ms()
+        if compil.args.no_parallel {
+            this.symbols_serial()
+        } else {
+            this.symbols_parallel()
+        }
+        symbols_end := measure_time_now_ms()
+   
+        if compil.args.dump_symbols {
+            this.global_scope.show()
+        }
+
+        if compil.args.stats {
+            using ui
+            ms := symbols_end - symbols_beg
+            report_phase_time("Populated symbol tables", ms, Attr.YELLOW)
+            print "% global symbols", this.global_scope.symbols.size
+        }
+    }
+
+    proc symbols_serial(this) {
+        add_nodes_to_top_level_scope(this.global_scope, this.top_level_nodes)
+    }
+
+    proc symbols_parallel(this) {
+        this.symbols_serial()
+    }
+
     proc total_lines(this) : u64
         return this.n_lines
 
     proc code_lines(this) : u64
         return this.n_lines - this.n_blank_lines
+
+    proc __inline__ add_new_module_scope_locked(this, name : string ref) : i32 {
+        this.global_scope_lock.lock()
+            idx := this._add_new_module_scope(name)
+        this.global_scope_lock.unlock()
+        return idx
+    }
+
+    proc __inline__ add_new_module_scope(this, name : string ref) : i32 {
+        return this._add_new_module_scope(name)
+    }
+
+    proc _add_new_module_scope(this, name : string ref) : i32 {
+        return this.global_scope.get_or_add_module_scope_idx(name)
+    }
+
 
     proc __inline__ get_next_include_container_locked(this) : include_container ref {
         this.include_container_lock.lock()
@@ -158,38 +202,26 @@ type frontend {
     }
 
 
-    proc __inline__ first_encounter_of_file_locked(this, path : string ref) : bool {
+    proc __inline__ first_encounter_of_file_locked(this, path : string ref) : (string ref | none) {
         this.files_seen_lock.lock()
             r := this._first_encounter_of_file(path)
         this.files_seen_lock.unlock()
         return r
     }
 
-    proc __inline__ first_encounter_of_file(this, path : string ref) : bool {
+    proc __inline__ first_encounter_of_file(this, path : string ref) : (string ref | none) {
         return this._first_encounter_of_file(path)
     }
 
-    proc _first_encounter_of_file(this, path : string ref) : bool {
-        foreach ref f in this.files_seen {
-            if f == path { return false }
+    proc _first_encounter_of_file(this, path : string ref) : (string ref | none) {
+        search := this.files_seen.lookup(path)
+
+        if search.is_none() {
+            return this.files_seen.insert(path.copy())
         }
 
-        this.files_seen.push(path.copy())
-
-        return true
+        return nothing
     }
-
-    # proc _first_encounter_of_file(this, path : string ref) : bool {
-    #     print "!!! %", path.c_str()
-    #     search := this.files_seen.lookup(path)
-
-    #     if search.is_none() {
-    #         this.files_seen.insert(path.copy())
-    #         return true
-    #     }
-
-    #     return false
-    # }
 }
 
 proc __inline__ open_file(path : string ref, search_paths : bool) : file {

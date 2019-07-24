@@ -11,3 +11,26 @@ compil      : compilation* = NULL as compilation*
 output_lock : mutex
 
 const SYSTEM_MODULE_PATH := "/usr/local/lib/bjou/modules/"
+
+const seahorse_logo := 
+"                      $$
+                       $$
+                  =$$$$$$$
+               $$$$$$$$$$$~
+              $$$$    $$ $$
+             $$$$         $$
+             $$$$         $$$
+             $$$$    .$$   $$O
+             $$$$      $$
+            ^$$$       $$$
+           $$$$         $$
+      $$$$$$            $$
+      $$$$$$$          +$$
+           O$$$        $$$
+             $$$      $$$
+             $$$$    $$$
+             $$$$   $$
+             $$$$ $$
+             %$$$
+              $$$$
+               ^$$$$$$$$"

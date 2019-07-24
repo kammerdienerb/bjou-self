@@ -10,7 +10,7 @@ import "build.bjou"
 
     options.output_name = "bjou"
 
-    options.time    = true
+    options.time    = not true
     options.verbose = not true
 
     foreach f in sources
