@@ -248,7 +248,7 @@ type error_builder extends error_builder_base {
             file.stderr().write("\n", 1)
         }
 
-        if this.fatal    { (@compil).abort() }
+        if this.fatal    { __sys::exit(1) }
         
         output_lock.unlock()    
         return this
@@ -594,7 +594,7 @@ proc error(message : string ref, fatal : bool) {
 
     write_error(message)
 
-    if fatal    { (@compil).abort() }
+    if fatal    { __sys::exit(1) }
     
     output_lock.unlock() 
 }

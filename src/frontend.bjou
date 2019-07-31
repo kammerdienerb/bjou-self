@@ -21,11 +21,19 @@ using import "hash_functions.bjou"
 using import "scope.bjou"
 
 
+type async_module_scope_info {
+    idx   : i32
+    nodes : astref[...] # copied, not owned
+    fe    : frontend ref
+}
+
+
 type frontend {
     n_files            : u64
     n_lines            : u64
     n_blank_lines      : u64
     n_bytes            : u64
+    pool               : (threadpool ref | none)
     all_nodes          : bucket_array$ast
     top_level_nodes    : bucket_array$astref
     include_containers : bucket_array$include_container
@@ -55,12 +63,25 @@ type frontend {
     proc go(this) {
         beg := measure_time_now_ms()
 
+        if not compil.args.no_parallel {
+            n_threads := compil.args.threads
+            if n_threads == -1
+                n_threads = thread::hw_threads() - 1
+
+            this.pool = threadpool.create(n_threads)
+        }
+
         # do work
         this.do_parsing()
         if compil.args.syntax_only {
             return
         }
         this.do_symbols()
+
+        if pool : threadpool ref = this.pool {
+            pool.stop(stopmode.GRACEFUL)
+            pool.free()
+        }
 
         end := measure_time_now_ms()
 
@@ -73,10 +94,10 @@ type frontend {
 
     proc do_parsing(this) {
         parse_beg := measure_time_now_ms()
-        if compil.args.no_parallel {
-            this.parse_serial()
+        if pool : threadpool ref = this.pool {
+            this.parse_parallel(pool)
         } else {
-            this.parse_parallel()
+            this.parse_serial()
         }
         parse_end := measure_time_now_ms()
 
@@ -106,13 +127,7 @@ type frontend {
         }
     }
 
-    proc parse_parallel(this) {
-        n_threads := compil.args.threads
-        if n_threads == -1
-            n_threads = thread::hw_threads() - 1
-
-        pool := threadpool.create(n_threads)
-
+    proc parse_parallel(this, pool : threadpool ref) {
         foreach ref path in compil.args.input {
             f        := open_file(path, search_paths: false)
             new_path := str(f.path)
@@ -130,17 +145,24 @@ type frontend {
         }
 
         pool.wait()
-        pool.stop(stopmode.GRACEFUL)
-        pool.free()
     }
 
     proc do_symbols(this) {
         symbols_beg := measure_time_now_ms()
-        if compil.args.no_parallel {
-            this.symbols_serial()
+
+        this.symbols_top_level()
+
+        procs := [...astref]
+       
+        filter_scopes_from_bucket_array(this.top_level_nodes, procs)
+        
+        if pool : threadpool ref = this.pool {
+            this.symbols_rest_parallel(pool, procs)
         } else {
-            this.symbols_parallel()
+            this.symbols_rest_serial(procs)
         }
+        
+        procs.free()
         symbols_end := measure_time_now_ms()
    
         if compil.args.dump_symbols {
@@ -151,16 +173,68 @@ type frontend {
             using ui
             ms := symbols_end - symbols_beg
             report_phase_time("Populated symbol tables", ms, Attr.YELLOW)
-            print "% global symbols", this.global_scope.symbols.size
         }
     }
 
-    proc symbols_serial(this) {
+    proc symbols_top_level(this) {
         add_nodes_to_top_level_scope(this.global_scope, this.top_level_nodes)
     }
 
-    proc symbols_parallel(this) {
-        this.symbols_serial()
+    proc __inline__ symbols_one(this, module_idx : i32, node : ast ref) {
+        if module_idx == -1 {
+            recursively_build_subscopes(this.global_scope, node) 
+        } else {
+            module_scope := this.global_scope.get_module_scope_by_idx(module_idx)
+            recursively_build_subscopes(module_scope, node)
+        }
+    }
+
+    proc symbols_rest_serial(this, procs : astref[...] ref) {
+        foreach m_node in procs {
+            # @unsafe
+            # Nodes are only added to procs if they aren't 'nothing'.
+            node       := unsafe_ast_ref(m_node)
+            module_idx := unsafe_baseref(node).module_idx
+            this.symbols_one(module_idx, node)
+        }
+    }
+
+    proc symbols_module_thread(arg : void*) {
+        info := arg as async_module_scope_info*
+
+        foreach m_node in info.nodes {
+            # @unsafe
+            # Nodes are only added to procs if they aren't 'nothing'.
+            node := unsafe_ast_ref(m_node)
+            (info.fe).symbols_one(info.idx, node)
+        }
+        delete info
+    }
+
+    proc symbols_rest_parallel(this, pool : threadpool ref, procs : astref[...] ref) {
+        max_module_idx      := this.global_scope.module_scopes.size
+        procs_by_module_idx := [...astref[...]]
+        procs_by_module_idx.resize(max_module_idx + 1, [...astref])
+
+        foreach m_node in procs {
+            node       := unsafe_ast_ref(m_node)
+            module_idx := unsafe_baseref(node).module_idx
+            
+            procs_by_module_idx[module_idx + 1].push(m_node)
+        }
+
+        for module_idx : i32 = 0; module_idx <= max_module_idx; module_idx += 1 {
+            info := new async_module_scope_info
+            @info = { async_module_scope_info:
+                .idx   = module_idx - 1,
+                .nodes = procs_by_module_idx[module_idx],
+                .fe    = this,
+            }
+            pool.add_task(frontend.symbols_module_thread, info as void*)
+        }
+
+        pool.wait()
+        # this.symbols_rest_serial(procs)
     }
 
     proc total_lines(this) : u64
@@ -221,6 +295,21 @@ type frontend {
         }
 
         return nothing
+    }
+}
+
+
+proc filter_scopes_from_bucket_array(nodes : bucket_array$astref ref, procs : astref[...] ref) {
+    for it := nodes.iter(); not it.is_end(); it.next() {
+        if node : ast ref = it.val() {
+            if unsafe_baseref(node).get_flag(ast_flag.OPENS_SCOPE) {
+                procs.push(node)
+            } else if i : includestmt = node    {
+                if ic : include_container ref = i.container {
+                    filter_scopes_from_bucket_array(ic.nodes, procs)
+                }
+            }
+        } else debug_assert(false, "bad node in filter_scopes_from_bucket_array")
     }
 }
 

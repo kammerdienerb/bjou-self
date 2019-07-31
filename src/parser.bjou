@@ -396,6 +396,8 @@ type parser {
         result    := ifstmt.create()
         result.cxt = context.from(this.cur_cxt)
 
+        result.set_flag(ast_flag.OPENS_SCOPE)
+
         this.eat(2) # 'if'
 
         if this.optional$identifier_then_colon(skip_eat: true) {
@@ -421,6 +423,8 @@ type parser {
        
         result    := elsestmt.create()
         result.cxt = context.from(this.cur_cxt)
+        
+        result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(4) # 'else'
 
@@ -435,6 +439,8 @@ type parser {
        
         result    := foreachstmt.create()
         result.cxt = context.from(this.cur_cxt)
+        
+        result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(7) # 'foreach'
 
@@ -461,6 +467,8 @@ type parser {
        
         result    := forstmt.create()
         result.cxt = context.from(this.cur_cxt)
+        
+        result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(3) # 'for'
 
@@ -487,6 +495,8 @@ type parser {
        
         result    := whilestmt.create()
         result.cxt = context.from(this.cur_cxt)
+        
+        result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(5) # 'while'
 
@@ -512,6 +522,8 @@ type parser {
        
         result    := dowhilestmt.create()
         result.cxt = context.from(this.cur_cxt)
+        
+        result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(2) # 'do'
 
@@ -786,6 +798,8 @@ type parser {
 
         if no_mangle    { result.set_flag(ast_flag.NO_MANGLE) }
         if is_inline    { result.set_flag(ast_flag.IS_INLINE) }
+
+        result.set_flag(ast_flag.OPENS_SCOPE)
       
         ident := { string: }
         has_ident := this.optional$identifier(ident)

@@ -55,10 +55,6 @@ type compilation {
         this.search_paths.push(str("modules/"))
         this.search_paths.push(str(SYSTEM_MODULE_PATH))
     }
-
-    proc abort(this) {
-        __sys::exit(1)
-    }
 }
 
 proc setup_default_compilation(new_compil : compilation ref) {

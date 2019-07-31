@@ -241,7 +241,8 @@ enum ast_flag {
     PAREN,
     IS_DESTRUCTURE,
     FOREACH_TAKE_REF,
-    TYPE_ALIAS
+    TYPE_ALIAS,
+    OPENS_SCOPE
 }
 
 proc unsafe_baseref(this : ast ref) : astbase ref {

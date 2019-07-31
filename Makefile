@@ -8,6 +8,9 @@ debug: clean
 release: clean
 	bjou make/make_release.bjou
 
+check: clean
+	bjou make/make_check.bjou
+
 symbols: clean
 	bjou make/make_symbols.bjou
 
