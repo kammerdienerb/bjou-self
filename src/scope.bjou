@@ -215,7 +215,7 @@ proc add_to_scope(s : scope ref, node : ast ref) {
             if ex : ast ref = search {
                 # The symbol exists, but isn't in an overload_set.
                 if ex_decl : declaration = ex {
-                    if not can_be_overload(node) {
+                    if not can_be_overload(ex) {
                         redefinition_error(decl.name, decl, ex_decl)
                     }
 
@@ -326,6 +326,7 @@ proc add_overload(s : scope ref, name : string ref, new_proc : ast ref) {
 
 proc can_be_overload(node : ast ref) : bool {
     is_overloadable := false
+
     if      p   : procdef         = node    { is_overloadable = true }
     else if t_p : templateprocdef = node    { is_overloadable = true }
 

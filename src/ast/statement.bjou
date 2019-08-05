@@ -1,0 +1,213 @@
+abstract type statement extends astbase {  }
+
+
+type breakstmt extends statement {
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : breakstmt {
+        r := { breakstmt: }
+        r.init()
+        return r
+    }
+}
+
+type continuestmt extends statement {
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : continuestmt {
+        r := { continuestmt: }
+        r.init()
+        return r
+    }
+}
+
+type dowhilestmt extends statement {
+    cond  : astref
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : dowhilestmt {
+        r := { dowhilestmt: }
+        r.init()
+        return r
+    }
+}
+
+type elsestmt extends statement {
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : elsestmt {
+        r := { elsestmt: }
+        r.init()
+        return r
+    }
+}
+
+type foreachstmt extends statement {
+    ident : string
+    expr  : astref
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.ident = str()
+        this.stmts = [...astref]
+    }
+
+    proc create() : foreachstmt {
+        r := { foreachstmt: }
+        r.init()
+        return r
+    }
+}
+
+type forstmt extends statement {
+    ini   : astref
+    cond  : astref
+    step  : astref
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : forstmt {
+        r := { forstmt: }
+        r.init()
+        return r
+    }
+}
+
+type ifstmt extends statement {
+    cond       : astref
+    stmts      : astref[...]
+    else_block : astref
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : ifstmt {
+        r := { ifstmt: }
+        r.init()
+        return r
+    }
+}
+
+type importstmt extends statement {
+    path : string 
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.path = str()
+    }
+
+    proc create() : importstmt {
+        r := { importstmt: }
+        r.init()
+        return r
+    }
+}
+
+type includestmt extends statement {
+    path      : string
+    container : (include_container ref | none)
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.path = str()
+    }
+
+    proc create() : includestmt {
+        r := { includestmt: }
+        r.init()
+        return r
+    }
+}
+
+type printstmt extends statement {
+    args : astref
+
+
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : printstmt {
+        r := { printstmt: }
+        r.init()
+        return r
+    }
+}
+
+type returnstmt extends statement {
+    expr : astref
+
+
+    proc init(this) {
+        astbase.init(this)
+    }
+
+    proc create() : returnstmt {
+        r := { returnstmt: }
+        r.init()
+        return r
+    }
+}
+
+type usingstmt extends statement {
+    imprt : astref
+    ident : string
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.ident = str()
+    }
+
+    proc create() : usingstmt {
+        r := { usingstmt: }
+        r.init()
+        return r
+    }
+}
+
+type whilestmt extends statement {
+    cond  : astref
+    stmts : astref[...]
+
+
+    proc init(this) {
+        astbase.init(this)
+        this.stmts = [...astref]
+    }
+
+    proc create() : whilestmt {
+        r := { whilestmt: }
+        r.init()
+        return r
+    }
+}
+

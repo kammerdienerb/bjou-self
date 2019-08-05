@@ -10,3 +10,119 @@ abstract type declaration extends typed {
         this.name      = str()
     }
 }
+
+type vardecl extends declaration {
+    type_decl : astref
+    expr      : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : vardecl {
+        r := { vardecl: }
+        r.init()
+        return r
+    }
+}
+
+type constantdecl extends declaration {
+    type_decl : astref
+    expr      : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : constantdecl {
+        r := { constantdecl: }
+        r.init()
+        return r
+    }
+}
+
+type procdef extends declaration {
+    param_decls : astref[...]
+    ret_decl    : astref
+    stmts       : astref[...]
+
+    
+    proc init(this) {
+        declaration.init(this)
+        this.param_decls = [...astref]
+        this.stmts       = [...astref]
+    }
+
+    proc create() : procdef {
+        r := { procdef:  }
+        r.init()
+        return r
+    }
+}
+
+type templateprocdef extends declaration {
+    template_def : astref
+    template     : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : templateprocdef {
+        r := { templateprocdef:  }
+        r.init()
+        return r
+    }
+}
+
+type typedef extends declaration {
+    extends_or_alias : astref
+    declarations     : astref[...]
+
+
+    proc init(this) {
+        declaration.init(this)
+        this.declarations = [...astref]
+    }
+
+    proc create() : typedef {
+        r := { typedef: }
+        r.init()
+        return r
+    }
+}
+
+type templatetypedef extends declaration {
+    template_def : astref
+    template     : astref
+
+
+    proc init(this) {
+        declaration.init(this)
+    }
+
+    proc create() : templatetypedef {
+        r := { templatetypedef:  }
+        r.init()
+        return r
+    }
+}
+
+type enumdef extends declaration {
+    identifiers : string[...]
+
+
+    proc init(this) {
+        declaration.init(this)
+        this.identifiers = [...string]
+    }
+
+    proc create() : enumdef {
+        r := { enumdef: }
+        r.init()
+        return r
+    }
+}
