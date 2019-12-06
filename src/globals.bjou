@@ -10,6 +10,7 @@ using import "ast.bjou"
 compil      : compilation* = NULL as compilation*
 output_lock : mutex
 
+# @winpath
 const SYSTEM_MODULE_PATH := "/usr/local/lib/bjou/modules/"
 
 const seahorse_logo := 

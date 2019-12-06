@@ -13,26 +13,25 @@ type argset {
 
     # switches
     optimize       : bool
-    emit_llvm      : bool
+    keep_inter     : bool
     no_link        : bool
     no_lld         : bool
     no_color       : bool
     no_preload     : bool
     no_abc         : bool
     no_parallel    : bool
-    symbols        : bool
     stats          : bool
     stats_no_files : bool
     dump_symbols   : bool
     front          : bool
     syntax_only    : bool
-    verbose        : bool
 
     version        : bool
     seahorse       : bool
     help           : bool
 
     # values
+    backend        : string
     mfeat          : string
     march          : string
     threads        : int
@@ -45,6 +44,7 @@ type argset {
     proc create() : argset {
         return { argset: 
             .input      = [...string],
+            .backend    = str(),
             .mfeat      = str(),
             .march      = str(),
             .threads    = -1,
@@ -62,6 +62,9 @@ type argset {
         this.searchpath.free()
         this.march.free()
         this.mfeat.free()
+        this.backend.free()
+        foreach ref f in this.input
+            f.free()
         this.input.free()
     }
     
@@ -72,26 +75,25 @@ type argset {
             print    "]"
         } else print "input files    = []"
         print        "optimize       = %", this.optimize
-        print        "emit_llvm      = %", this.emit_llvm
+        print        "keep_inter     = %", this.keep_inter
         print        "no_link        = %", this.no_link
         print        "no_lld         = %", this.no_lld
         print        "no_color       = %", this.no_color
         print        "no_preload     = %", this.no_preload
         print        "no_abc         = %", this.no_abc
         print        "no_parallel    = %", this.no_parallel
-        print        "symbols        = %", this.symbols
         print        "stats          = %", this.stats
         print        "stats-no-files = %", this.stats_no_files
         print        "dump-symbols   = %", this.dump_symbols
         print        "front          = %", this.front
         print        "syntax_only    = %", this.syntax_only
-        print        "verbose        = %", this.verbose
         print        "version        = %", this.version
         print        "seahorse       = %", this.seahorse
         print        "help           = %", this.help
         print        "threads        = %", this.threads
         print        "mfeat          = '%'", this.mfeat.c_str()
         print        "march          = '%'", this.march.c_str()
+        print        "backend        = '%'", this.backend.c_str()
         if |this.searchpath| {
             print    "searchpaths    = ["
             foreach ref p in this.searchpath print "    '%'", p.c_str()
@@ -132,46 +134,66 @@ proc strattr(s : string ref, attr1 : char*, attr2 : char*, attr3 : char*) : stri
     return s
 }
 
+type error_note     = string
+type error_location = ((string | none), context)
+type error_piece    = (error_note | error_location)
+
 abstract type error_builder_base {
     message   : string
-    notes     : string[...]
-    locations : ((string | none), context)[...]
+    pieces : error_piece[...]
 
     
     proc free(this) {
-        foreach ref loc in this.locations {
-            if s : string = loc.0
-                s.free()
+        foreach ref piece in this.pieces {
+            if note : error_note = piece {
+                note.free()
+            } else if loc : error_location = piece {
+                if s : string = loc.0 {
+                    s.free()
+                }
+            }
         }
-        this.locations.free()
-        
-        foreach ref note in this.notes {
-            note.free()
-        }
-        this.notes.free()
+        this.pieces.free()
         this.message.free()
 
         delete &this
     }
 
-    proc with_message(this, msg : char*) {
-        this.message.set(msg)
-    }
-
-    proc add_note(this, note : char*) {
-        this.notes.push(str(note))
-    }
+    proc with_message(this, msg : char*)    { this.message.set(msg)       }
+    
+    proc add_note(this, note : char*)       { this.pieces.push(str(note)) }
     
     proc add_location(this, msg : char*, cxt : context) {
         s : (string | none) = str(msg)
-        this.locations.push((s, cxt))
+        this.pieces.push((s, cxt))
     }
     
     proc add_location(this, cxt : context) {
         s : (string | none) = nothing
-        this.locations.push((s, cxt))
+        this.pieces.push((s, cxt))
     }
-
+    
+    proc report_piece(this, piece : error_piece ref, source_highlight_attr : Attr) {
+        if note : error_note = piece {
+            note'  := note.copy()
+            strattr(note', get_attr(Attr.GREEN))
+            note'' := str("   *** ")
+            note''.append(note')
+            file.stderr().write(note'')
+            file.stderr().write("\n", 1) 
+            note''.free()
+            note'.free()
+        } else if loc : error_location = piece {
+            if msg : string = loc.0 {
+                msg' := msg.copy()
+                strattr(msg', get_attr(Attr.GREEN))
+                file.stderr().write(msg') 
+                file.stderr().write("\n", 1) 
+                msg'.free()
+            }
+            highlight_source_location(loc.1, source_highlight_attr)
+        }
+    }
 }
 
 type error_builder extends error_builder_base {
@@ -208,8 +230,7 @@ type error_builder extends error_builder_base {
         @r = { error_builder:
             .fatal     = true,
             .message   = str(),
-            .notes     = [...string],
-            .locations = [...((string | none), context)],
+            .pieces    = [...error_piece],
         }
 
         return @r
@@ -219,34 +240,14 @@ type error_builder extends error_builder_base {
         output_lock.lock()
 
         write_error(this.message)
-        foreach ref loc in this.locations {
-            if msg : string = loc.0 {
-                msg' := msg.copy()
-                strattr(msg', get_attr(Attr.GREEN))
-                file.stderr().write(msg') 
-                file.stderr().write("\n", 1) 
-                msg'.free()
-            }
-            highlight_source_location(loc.1, Attr.RED)
-       
-            if &loc != &this.locations.back()    { file.stderr().write("\n", 1) }
-        }
+        idx := 0
+        foreach ref piece in this.pieces {
+            if idx > 0    { file.stderr().write("\n", 1) }
 
-        foreach ref note in this.notes {
-            note'  := note.copy()
-            strattr(note', get_attr(Attr.GREEN))
-            note'' := str("        *** ")
-            note''.append(note')
-            file.stderr().write(note'')
-            file.stderr().write("\n", 1) 
-            note''.free()
-            note'.free()
+            this.report_piece(piece, source_highlight_attr: Attr.RED)
+            idx += 1
         }
-
-        if |this.locations| > 0
-        or |this.notes|     > 0 {
-            file.stderr().write("\n", 1)
-        }
+        if |this.pieces| > 0    { file.stderr().write("\n", 1) }
 
         if this.fatal    { __sys::exit(1) }
         
@@ -260,8 +261,7 @@ type warning_builder extends error_builder_base {
         r := new warning_builder
         @r = { warning_builder:
             .message   = str(),
-            .notes     = [...string],
-            .locations = [...((string | none), context)],
+            .pieces    = [...error_piece],
         }
 
         return @r
@@ -291,32 +291,14 @@ type warning_builder extends error_builder_base {
         output_lock.lock()
 
         write_warning(this.message)
-        foreach ref loc in this.locations {
-            if msg : string = loc.0 {
-                msg' := msg.copy()
-                strattr(msg', get_attr(Attr.GREEN))
-                file.stderr().write(msg') 
-                file.stderr().write("\n", 1) 
-                msg'.free()
-            }
-            highlight_source_location(loc.1, Attr.MAGENTA)
-        }
+        idx := 0
+        foreach ref piece in this.pieces {
+            if idx > 0    { file.stderr().write("\n", 1) }
 
-        foreach ref note in this.notes {
-            note'  := note.copy()
-            strattr(note', get_attr(Attr.GREEN))
-            note'' := str("        *** ")
-            note''.append(note')
-            file.stderr().write(note'')
-            file.stderr().write("\n", 1) 
-            note''.free()
-            note'.free()
+            this.report_piece(piece, source_highlight_attr: Attr.MAGENTA)
+            idx += 1
         }
-        
-        if |this.locations| > 0
-        or |this.notes|     > 0 {
-            file.stderr().write("\n", 1)
-        }
+        if |this.pieces| > 0    { file.stderr().write("\n", 1) }
         
         output_lock.unlock()    
 
@@ -431,35 +413,67 @@ proc write_context_header(cxt : context ref) {
 proc highlight_source_location(cxt : context ref, attr : Attr) {
     write_context_header(cxt)
  
-    f := { file: }
+    f          := { file: }
+    path_c_str := ""
 
-    if path : string ref = cxt.file
-        f = file.open(path.c_str(), file.READ)
-    else
+    if path : string ref = cxt.file {
+        path_c_str = path.c_str()
+        f          = file.open(path_c_str, file.READ)
+    } else {
         \die { "context does not have a path" }
+    }
     
     if not f.good()    \die{ "could not open file" }
 
-    lines := f.lines(cxt.end.ln + 3)
+    file_contents      := f.read()
+    file_contents_ptr  := file_contents.data()
+    file_offset        := 0
+    l                  := 1
+    first_line_to_show := (cxt.beg.ln as i64) - 2i64
+
+    if first_line_to_show < 1 {
+        first_line_to_show = 1
+    }
+
+    while true {
+        if l == first_line_to_show    { break }
+
+        c := file_contents[file_offset]
+        if c == '\n'    { l += 1 }
+        file_offset += 1
+    }
+
+    delete file_contents_ptr
+    f.seek_begin()
+    f.seek_forward(file_offset)
+
+    n_target_lines := cxt.end.ln - cxt.beg.ln + 1
+    lines          := f.lines(2 + n_target_lines + 2)
+    f.close()
+
+    n_lines_printed := 0
 
     # print the 'before' context
     if cxt.beg.ln < 3 {
-        for i := 0; i < cxt.beg.ln - 1 and i < |lines|; i += 1 {
-            write_lineno_buf(i + 1, false)
-            file.stderr().write(lines[i])
+        for ; n_lines_printed < cxt.beg.ln - 1 and n_lines_printed < |lines|; n_lines_printed += 1 {
+            write_lineno_buf(n_lines_printed + 1, false)
+            file.stderr().write(lines[n_lines_printed])
         }
     } else {
         write_lineno_buf(cxt.beg.ln - 2, false)
-        file.stderr().write(lines[cxt.beg.ln - 3])
+        file.stderr().write(lines[n_lines_printed])
+        n_lines_printed += 1
         write_lineno_buf(cxt.beg.ln - 1, false)
-        file.stderr().write(lines[cxt.beg.ln - 2])
+        file.stderr().write(lines[n_lines_printed])
+        n_lines_printed += 1
     }
 
     # print the target line
     if compil.args.no_color {
         if cxt.beg.ln == cxt.end.ln {
             write_lineno_buf(cxt.beg.ln, true)
-            file.stderr().write(lines[cxt.beg.ln - 1])
+            file.stderr().write(lines[n_lines_printed])
+            n_lines_printed += 1
             write_lineno_buf_padding()
             for i := 0; i < cxt.beg.ch - 1; i += 1
                 file.stderr().write(" ", 1)
@@ -476,7 +490,8 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
             file.stderr().write("\n", 1)
         } else {
             for i := cxt.beg.ln; i <= cxt.end.ln; i += 1 {
-                line := lines[i - 1]
+                line := lines[n_lines_printed]
+                n_lines_printed += 1
                 write_lineno_buf(i, i == 0)
                 file.stderr().write(line)
                 write_lineno_buf_padding()
@@ -508,7 +523,8 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
         r    := get_attr(Attr.RESET)
 
         if cxt.beg.ln == cxt.end.ln {
-            line := lines[cxt.beg.ln - 1]
+            line := lines[n_lines_printed]
+            n_lines_printed += 1
             pre  := line.substr(0, cxt.beg.ch - 1)
             high := line.substr(cxt.beg.ch - 1, cxt.end.ch - cxt.beg.ch + 1)
             post := line.substr(cxt.end.ch)
@@ -530,7 +546,8 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
             pre.free()
         } else {
             for i := cxt.beg.ln; i <= cxt.end.ln; i += 1 {
-                line := lines[i - 1]
+                line := lines[n_lines_printed]
+                n_lines_printed += 1
                 file.stderr().write(a, cstrlen(a))
                 file.stderr().write(b, cstrlen(b))
                 write_lineno_buf(i, i == cxt.beg.ln)
@@ -567,19 +584,26 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
     }
 
     # print the 'after' context
-    if |lines| - cxt.end.ln < 3 {
-        for i := 0; i < |lines| - cxt.end.ln; i += 1 {
+    first_line_after := n_lines_printed
+    if |lines| - first_line_after < 3 {
+        for i := 0; i < |lines| - first_line_after; i += 1 {
             write_lineno_buf(cxt.end.ln + i + 1, false)
-            file.stderr().write(lines[cxt.end.ln + i])
+            file.stderr().write(lines[n_lines_printed])
+            n_lines_printed += 1
         }
     } else {
         write_lineno_buf(cxt.end.ln + 1, false)
-        file.stderr().write(lines[cxt.end.ln])
+        file.stderr().write(lines[n_lines_printed])
+        n_lines_printed += 1
         write_lineno_buf(cxt.end.ln + 2, false)
-        file.stderr().write(lines[cxt.end.ln + 1])
+        file.stderr().write(lines[n_lines_printed])
+        n_lines_printed += 1
     }
-
-    # file.stderr().write("\n", 1)
+                
+    if  lines[n_lines_printed - 1].len()
+    and lines[n_lines_printed - 1].back() != '\n' {
+        file.stderr().write("\n", 1)
+    }
 
     lines.free()
 }

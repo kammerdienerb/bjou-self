@@ -2,3 +2,7 @@ build
 backup
 profile
 results
+.ccls-cache
+foo*
+test.bjou
+typer

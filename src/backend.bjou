@@ -6,17 +6,37 @@ using import "measure_time.bjou"
 
 using import "globals.bjou"
 using import "compilation.bjou"
+using import "debug.bjou"
+
+using import "c_backend.bjou"
+using import "llvm_backend.bjou"
+
+type default_backend = c_backend
 
 type backend {
+    impl : (c_backend | llvm_backend | none)
 
-    proc create() : backend {
-        return { backend: }
+
+    proc create(kind : string ref) : backend {
+        r := { backend: }
+        if kind == "c" {
+            r.impl = c_backend.create()
+        } else if kind == "llvm" {
+            r.impl = llvm_backend.create()
+        } else if kind.len() == 0 {
+            r.impl = default_backend.create()
+        } else debug_assert(false, "invalid backend kind string")
+
+        return r
     }
 
     proc go(this) {
         beg := measure_time_now_ms()
 
         # do work
+        if impl : c_backend = this.impl         { impl.go() }
+        else if impl : llvm_backend = this.impl { impl.go() }
+        else debug_assert(false, "invalid backend impl")
 
         end := measure_time_now_ms()
         if compil.args.stats {

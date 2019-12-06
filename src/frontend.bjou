@@ -48,15 +48,15 @@ type frontend {
 
     proc create() : frontend {
         return { frontend:
-            .node_lock              = mutex.create(),
-            .include_container_lock = mutex.create(),
-            .files_seen_lock        = mutex.create(),
-            .global_scope_lock      = mutex.create(),
             .all_nodes              = bucket_array$ast.create(),
             .include_containers     = bucket_array$include_container.create(),
             .top_level_nodes        = bucket_array$astref.create(),
             .files_seen             = hash_set$(string, str_hasher).create(),
             .global_scope           = globalscope.create(),
+            .node_lock              = mutex.create(),
+            .include_container_lock = mutex.create(),
+            .files_seen_lock        = mutex.create(),
+            .global_scope_lock      = mutex.create(),
         }
     }
 

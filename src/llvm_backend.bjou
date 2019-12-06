@@ -1,0 +1,11 @@
+# llvm_backend.bjou
+
+module llvm_backend
+
+type llvm_backend {
+    proc create() : llvm_backend {
+        return { llvm_backend: }
+    }
+
+    proc go(this) { }
+}

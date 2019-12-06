@@ -48,9 +48,9 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
     arg_parser.setUnlabelled("FILES", "Input source files.")
 
     optimize       := arg_parser.addSwitch('O', "optimize")
-                        .withDesc("Run LLVM optimization passes.")
-    emit_llvm      := arg_parser.addSwitch("emit-llvm")
-                        .withDesc("Ouput an LLVM bytecode file.")
+                        .withDesc("Run optimization passes.")
+    keep_inter     := arg_parser.addSwitch('k', "keep-intermediate")
+                        .withDesc("Keep intermediate forms (C, LLVM IR) as files.")
     no_link        := arg_parser.addSwitch('c', "no-link")
                         .withDesc("Compile but do not link.")
     no_lld         := arg_parser.addSwitch("no-lld")
@@ -63,8 +63,8 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
                         .withDesc("Turn off array bounds checking.")
     no_parallel    := arg_parser.addSwitch("no-parallel")
                         .withDesc("Turn off compilation parallelization.")
-    symbols        := arg_parser.addSwitch("symbols")
-                        .withDesc("Print symbol tables to STDOUT.")
+    threads        := arg_parser.addValueInt("threads")
+                        .withDesc("The number of threads to be used in parallel compilation.")
     stats          := arg_parser.addSwitch("stats")
                         .withDesc("Print compilation statistics to STDOUT.")
     stats_no_files := arg_parser.addSwitch("stats-no-files")
@@ -75,12 +75,12 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
                         .withDesc("Only run the front end of the compiler.")
     syntax_only    := arg_parser.addSwitch("syntax-only")
                         .withDesc("Only run the parser on the input files.")
-    verbose        := arg_parser.addSwitch('v', "verbose")
-                        .withDesc("Print the LLVM IR to STDOUT.")
     mfeat          := arg_parser.addValueString("mfeat")
                         .withDesc("Features to add to the target CPU")
     march          := arg_parser.addValueString("march")
                         .withDesc("Architecture string to target.")
+    backend        := arg_parser.addValueString("backend")
+                        .withDesc("Compiler backend to target. (valid values are 'c' or 'llvm')")
     searchpath     := arg_parser.addMultiValueString('I', "searchpath")
                         .withDesc("Add a path to search when looking for modules.")
     link           := arg_parser.addMultiValueString('l', "link")
@@ -92,12 +92,18 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
     version        := arg_parser.addSwitch("version")
                         .withDesc("Display version info and exit.")
     help           := arg_parser.addSwitch('h', "help")
-                        .withDesc("Display usage info and exit.")
-    threads        := arg_parser.addValueInt("threads")
-                        .withDesc("The number of threads to be used in parallel compilation.")
+                        .withDesc("Display this usage info and exit.")
 
     # do the parsing
     success := arg_parser.parse(env.args())
+
+    if be : string ref = backend.value() {
+        if  cstrcmp(be.c_str(), "c")    != 0
+        and cstrcmp(be.c_str(), "llvm") != 0 {
+            print "invalid value for argument: 'backend'"
+            success = false
+        }
+    }
 
     if not success {
         usage := arg_parser.usage()
@@ -108,20 +114,18 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
     # transfer the arg values to the argset
     args.input.set(arg_parser.unlabelled.as_slice())
     args.optimize       = optimize.set
-    args.emit_llvm      = emit_llvm.set
+    args.keep_inter     = keep_inter.set
     args.no_link        = no_link.set
     args.no_lld         = no_lld.set
     args.no_color       = no_color.set
     args.no_preload     = no_preload.set
     args.no_abc         = no_abc.set
     args.no_parallel    = no_parallel.set
-    args.symbols        = symbols.set
     args.stats          = stats.set
     args.stats_no_files = stats_no_files.set
     args.dump_symbols   = dump_symbols.set
     args.front          = front.set
     args.syntax_only    = syntax_only.set
-    args.verbose        = verbose.set
     args.version        = version.set
     args.seahorse       = seahorse.set
     args.help           = help.set
@@ -131,6 +135,8 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
         args.mfeat.set(mf)
     if ma : string ref = march.value()
         args.march.set(ma)
+    if be : string ref = backend.value()
+        args.backend.set(be)
     if searchpaths : string[...] ref = searchpath.values()
         args.searchpath.set(searchpaths.as_slice())
     if links : string[...] ref = link.values()
@@ -151,8 +157,8 @@ proc main_init() {
     seedrand(time(NULL as time_t*))
 
     init_kwd_array()
-    init_parse_table()
     init_get_ch_val_escape_map()
+    init_new_bin_expr_from_op_jump_table()
     init_op_table()
 }
 

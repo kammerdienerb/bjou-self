@@ -59,14 +59,13 @@ type elsestmt extends statement {
 }
 
 type foreachstmt extends statement {
-    ident : string
+    var   : astref
     expr  : astref
     stmts : astref[...]
 
 
     proc init(this) {
         astbase.init(this)
-        this.ident = str()
         this.stmts = [...astref]
     }
 

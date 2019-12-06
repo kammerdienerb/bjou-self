@@ -5,28 +5,35 @@ module compilation
 using import "measure_time.bjou"
 using import "thread.bjou"
 using import "getrss.bjou"
+using import "io.bjou"
 
 import "ui.bjou"
 using import "globals.bjou"
 using import "frontend.bjou"
 using import "backend.bjou"
+using import "debug.bjou"
 
 type compilation {
-    replacing    : compilation*
-    args         : ui::argset ref
-    search_paths : string[...]
-    front        : frontend
-    back         : backend
+    replacing        : compilation*
+    args             : ui::argset ref
+    search_paths     : string[...]
+    front            : frontend
+    back             : backend
+    output_file_name : string
+
 
     proc create(args : ui::argset ref) : compilation {
         r := { compilation:
-                    .args                = args,
-                    .search_paths = [...string],
-                    .front               = frontend.create(),
-                    .back                = backend.create(),
+                .args             = args,
+                .search_paths     = [...string],
+                .front            = frontend.create(),
+                .back             = backend.create(args.backend),
+                .output_file_name = str(),
         }
 
         r.build_search_paths()
+        r.build_output_file_name()
+        r.verify_output_file_can_write()
 
         return r
     }
@@ -46,14 +53,68 @@ type compilation {
         foreach ref path in this.args.searchpath {
             if path.len() > 0 {
                 path' := path.copy()
+                # @winpath
                 if path'.back() != '/' {
                     path'.append('/')
                 }
                 this.search_paths.push(path')
             }
         }
+        # @winpath
         this.search_paths.push(str("modules/"))
         this.search_paths.push(str(SYSTEM_MODULE_PATH))
+    }
+
+    proc build_output_file_name(this) {
+        if this.args.output.len() > 0 {
+            this.output_file_name.set(this.args.output)
+            return
+        }
+
+        debug_assert(|this.args.input| > 0, "need input file to build output_basename")
+
+        this.output_file_name.set(this.args.input[0])
+        this.output_file_name.remove_ext()
+        this.output_file_name.remove_leading_dirs()
+
+        if this.args.no_link {
+            this.output_file_name.append(".o")
+        }
+    }
+
+    proc verify_output_file_can_write(this) {
+        # @incomplete
+        # Need something like this, but with stat() so we don't clobber files.
+        
+        # f := file.open(this.output_file_name.c_str(), file.WRITE)
+        # if not f.good() {
+        #     err_str := concat(str("Can't open output file '"),
+        #                       this.output_file_name.copy(),
+        #                       str("' for writing."))
+        #     ui::error(err_str.c_str())
+        # }
+        # f.close()
+    }
+}
+
+proc remove_ext(path : string ref) {
+    dot_pos := path.findlast('.')
+
+    if dot_pos != -1 {
+        path_swap := path.substr(0, dot_pos)
+        path.free()
+        path = path_swap
+    }
+}
+
+proc remove_leading_dirs(path : string ref) {
+    # @winpath
+    slash_pos := path.findlast('/')
+
+    if slash_pos != -1 {
+        path_swap := path.substr(slash_pos + 1)
+        path.free()
+        path = path_swap
     }
 }
 

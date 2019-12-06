@@ -217,6 +217,8 @@ proc add_to_scope(s : scope ref, node : ast ref) {
                 if ex_decl : declaration = ex {
                     if not can_be_overload(ex) {
                         redefinition_error(decl.name, decl, ex_decl)
+                    } else if not can_be_overload(node) {
+                        redefinition_cant_overload_error(decl.name, decl, ex_decl)
                     }
 
                     init_overload(s, decl.name, ex, node)
@@ -224,6 +226,12 @@ proc add_to_scope(s : scope ref, node : ast ref) {
                 } else debug_assert(false, "not a declaration")
             } else if ov : overload_set ref = search {
                 # Already an overloaded procedure moved to an overload_set.
+                if not can_be_overload(node) {
+                    ex_proc := unsafe_ast_ref(ov.procs.back())
+                    if ex_decl : declaration = ex_proc {
+                        redefinition_cant_overload_error(decl.name, decl, ex_decl)
+                    } else debug_assert(false, "not a declaration")
+                }
                 add_overload(s, decl.name, node)
             }
         }
@@ -244,8 +252,8 @@ proc recursively_build_subscopes(parent_scope : scope ref, node : ast ref) {
     else debug_assert(false, "node hash OPENS_SCOPE set, but isn't handled")
 }
 
-proc build_subscope_stmts(parent_scope : scope ref, stmts : astref[...]) {
-    foreach m_stmt in stmts {
+proc build_subscope_block(parent_scope : scope ref, block : astref[...]) {
+    foreach m_stmt in block {
         node := unsafe_ast_ref(m_stmt)
         if decl : declaration = node {
             add_to_scope(parent_scope, node)
@@ -266,7 +274,8 @@ proc build_subscope(parent_scope : scope ref, p : procdef ref) {
         }
     }
     
-    build_subscope_stmts(new_scope, p.stmts)
+    build_subscope_block(new_scope, p.stmts)
+
 }
 
 proc build_subscope(parent_scope : scope ref, i : ifstmt ref) {
@@ -274,22 +283,28 @@ proc build_subscope(parent_scope : scope ref, i : ifstmt ref) {
     if i.get_flag(ast_flag.IS_DESTRUCTURE) {
         add_to_scope(new_scope, unsafe_ast_ref(i.cond))
     }
-    build_subscope_stmts(new_scope, i.stmts)
+    build_subscope_block(new_scope, i.stmts)
 }
 
 proc build_subscope(parent_scope : scope ref, e : elsestmt ref) {
     new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
-    build_subscope_stmts(new_scope, e.stmts)
+    build_subscope_block(new_scope, e.stmts)
 }
 
 proc build_subscope(parent_scope : scope ref, f : forstmt ref) {
     new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
-    build_subscope_stmts(new_scope, f.stmts)
+    if ini : ast ref = f.ini {
+        add_to_scope(new_scope, ini)
+    }
+    build_subscope_block(new_scope, f.stmts)
 }
 
 proc build_subscope(parent_scope : scope ref, f : foreachstmt ref) {
     new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
-    build_subscope_stmts(new_scope, f.stmts)
+    if var : ast ref = f.var {
+        add_to_scope(new_scope, var)
+    }
+    build_subscope_block(new_scope, f.stmts)
 }
 
 proc build_subscope(parent_scope : scope ref, w : whilestmt ref) {
@@ -297,12 +312,12 @@ proc build_subscope(parent_scope : scope ref, w : whilestmt ref) {
     if w.get_flag(ast_flag.IS_DESTRUCTURE) {
         add_to_scope(new_scope, unsafe_ast_ref(w.cond))
     }
-    build_subscope_stmts(new_scope, w.stmts)
+    build_subscope_block(new_scope, w.stmts)
 }
 
 proc build_subscope(parent_scope : scope ref, d : dowhilestmt ref) {
     new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
-    build_subscope_stmts(new_scope, d.stmts)
+    build_subscope_block(new_scope, d.stmts)
 }
 
 proc init_overload(s : scope ref, name : string ref, existing_proc : ast ref, new_proc : ast ref) {
@@ -341,6 +356,19 @@ proc redefinition_error(name : string ref, decl : declaration ref, ex : declarat
     ui::error_builder.create()
         .with_message(err_str.c_str())
         .add_location(decl.name_cxt)
+        .add_location("Previous declaration:", ex.name_cxt)
+        .report()
+}
+
+proc redefinition_cant_overload_error(name : string ref, decl : declaration ref, ex : declaration ref) {
+    err_str := str("Redefinition of '")
+    err_str.append(name)
+    err_str.append("'.")
+
+    ui::error_builder.create()
+        .with_message(err_str.c_str())
+        .add_location(decl.name_cxt)
+        .add_note("non-procedure symbol can't be added as an overload")
         .add_location("Previous declaration:", ex.name_cxt)
         .report()
 }

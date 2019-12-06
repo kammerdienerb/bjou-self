@@ -66,15 +66,14 @@ type parser {
     proc free(this) {
         delete this.buff_ptr
 
-        this.f.close()
-
-        this.all_nodes.free()
-        this.top_level_nodes.free()
+        # There is no need to free these bucket_arrays because they are freed
+        # in merge_and_steal_data() in transfer_to_fe().
+        
+        # this.all_nodes.free()
+        # this.top_level_nodes.free()
 
         # async_parsers clean up themselves.
-        if not this.pool.is_none() {
-            delete &this
-        }
+        if not this.pool.is_none()    { delete &this }
     }
 
     proc go(this) {
@@ -263,7 +262,7 @@ type parser {
         this.expect$identifier(result.name, "constant name")
         result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        this.eat(1) # ':'
+        this.expect$colon("':'")
 
         if not this.optional$assign(skip_eat: true) {
             result.type_decl = this.parse_declarator()
@@ -448,7 +447,16 @@ type parser {
             result.set_flag(ast_flag.FOREACH_TAKE_REF)
         }
 
-        this.expect$identifier(result.ident, "identifier")
+        var    := vardecl.create()
+        var.cxt = var.name_cxt = context.from(this.cur_cxt)
+
+        this.expect$identifier(var.name, "identifier")
+
+        var.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        var.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
+        result.var = add(this.all_nodes, var)
+
         this.expect$kwd_in("'in'")
 
         result.expr = this.parse_expr()
@@ -483,6 +491,9 @@ type parser {
         }
         this.expect$semicolon("';'")
         result.step = this.parse_expr()
+        if result.step.is_none() {
+            this.error_on_next_token("Invalid step expression in 'for' loop.")
+        }
 
         this.parse_stmt_block(result.stmts, "'for' loop")
 
@@ -950,17 +961,21 @@ type parser {
         if this.optional$assign() {
             if is_abstract {
                 err_str := concat(str("'"), result.name.copy(), str("' is a type alias."))
-                ui::error_builder.create()
+                error_builder.create()
                     .with_message("Only struct types can be abstract.")
+                    .add_location(result.name_cxt)
                     .add_note(err_str.c_str())
                     .report()
             }
             result.extends_or_alias = this.parse_declarator()
+            if result.extends_or_alias.is_none() {
+                this.error_on_next_token("Expected type declarator in type alias.")
+            }
         } else {
             if this.optional$kwd_extends() {
                 result.extends_or_alias = this.parse_declarator()
                 if result.extends_or_alias.is_none() {
-                    this.error_on_next_token("Expected type  declarator after 'extends'.")
+                    this.error_on_next_token("Expected type declarator after 'extends'.")
                 }
             }
 
@@ -1315,37 +1330,7 @@ type parser {
         # will always provide a valid reference into the bucket array.
         result : ast ref = unsafe_ast_ref(result_astref)
 
-        if      op == Op.CALL         { result = callexpr.create()        }
-        else if op == Op.SUBSCRIPT    { result = subscriptexpr.create()   }
-        else if op == Op.DOT          { result = dotexpr.create()         }
-        else if op == Op.MULT         { result = multexpr.create()        }
-        else if op == Op.DIV          { result = divexpr.create()         }
-        else if op == Op.MOD          { result = modexpr.create()         }
-        else if op == Op.PLUS         { result = plusexpr.create()        }
-        else if op == Op.MINUS        { result = minusexpr.create()       }
-        else if op == Op.BSHL         { result = bshlexpr.create()        }
-        else if op == Op.BSHR         { result = bshrexpr.create()        }
-        else if op == Op.LSS          { result = lssexpr.create()         }
-        else if op == Op.LEQ          { result = leqexpr.create()         }
-        else if op == Op.GTR          { result = gtrexpr.create()         }
-        else if op == Op.GEQ          { result = geqexpr.create()         }
-        else if op == Op.EQU          { result = equexpr.create()         }
-        else if op == Op.NEQ          { result = neqexpr.create()         }
-        else if op == Op.BAND         { result = bandexpr.create()        }
-        else if op == Op.BXOR         { result = bxorexpr.create()        }
-        else if op == Op.BOR          { result = borexpr.create()         }
-        else if op == Op.AND          { result = andexpr.create()         }
-        else if op == Op.OR           { result = orexpr.create()          }
-        else if op == Op.ASSIGN       { result = assignexpr.create()      }
-        else if op == Op.MULT_ASSIGN  { result = multassignexpr.create()  }
-        else if op == Op.DIV_ASSIGN   { result = divassignexpr.create()   }
-        else if op == Op.MOD_ASSIGN   { result = modassignexpr.create()   }
-        else if op == Op.PLUS_ASSIGN  { result = plusassignexpr.create()  }
-        else if op == Op.MINUS_ASSIGN { result = minusassignexpr.create() }
-        else {
-            debug_assert(false, "invalid binary operator")
-            return nothing # @leak result slot. Should never get here.
-        }
+        result = new_bin_expr_from_op_jump_table[op as u32]()
 
         return result
     }
@@ -2130,9 +2115,9 @@ type parser {
         }
     }
 
-    proc eat(this, n : u64)
+    proc __inline__ eat(this, n : u64)
         this.eat(n, false)
-    proc eat(this, s : char*)
+    proc __inline__ eat(this, s : char*)
         this.eat(cstrlen(s), false)
     proc eat(this, n : u64, skip_clean : bool) {
         this.buff.advance(n)
@@ -2317,4 +2302,39 @@ proc get_ch_val(s : string ref, beg : location, path : (string ref | none) ref) 
         .report()
 
     return -1 as char
+}
+
+new_bin_expr_from_op_jump_table : <() : ast>[Op.N_OPS as u32]
+
+proc init_new_bin_expr_from_op_jump_table() {
+    new_bin_expr_from_op_jump_table.fill(Op.N_OPS,
+        proc __inline__ () : ast { debug_assert(false, "invalid bin op") return nothing })
+
+    new_bin_expr_from_op_jump_table[Op.CALL         as u32] = proc __inline__ () : ast return callexpr.create()
+    new_bin_expr_from_op_jump_table[Op.SUBSCRIPT    as u32] = proc __inline__ () : ast return subscriptexpr.create()
+    new_bin_expr_from_op_jump_table[Op.DOT          as u32] = proc __inline__ () : ast return dotexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MULT         as u32] = proc __inline__ () : ast return multexpr.create()
+    new_bin_expr_from_op_jump_table[Op.DIV          as u32] = proc __inline__ () : ast return divexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MOD          as u32] = proc __inline__ () : ast return modexpr.create()
+    new_bin_expr_from_op_jump_table[Op.PLUS         as u32] = proc __inline__ () : ast return plusexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MINUS        as u32] = proc __inline__ () : ast return minusexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BSHL         as u32] = proc __inline__ () : ast return bshlexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BSHR         as u32] = proc __inline__ () : ast return bshrexpr.create()
+    new_bin_expr_from_op_jump_table[Op.LSS          as u32] = proc __inline__ () : ast return lssexpr.create()
+    new_bin_expr_from_op_jump_table[Op.LEQ          as u32] = proc __inline__ () : ast return leqexpr.create()
+    new_bin_expr_from_op_jump_table[Op.GTR          as u32] = proc __inline__ () : ast return gtrexpr.create()
+    new_bin_expr_from_op_jump_table[Op.GEQ          as u32] = proc __inline__ () : ast return geqexpr.create()
+    new_bin_expr_from_op_jump_table[Op.EQU          as u32] = proc __inline__ () : ast return equexpr.create()
+    new_bin_expr_from_op_jump_table[Op.NEQ          as u32] = proc __inline__ () : ast return neqexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BAND         as u32] = proc __inline__ () : ast return bandexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BXOR         as u32] = proc __inline__ () : ast return bxorexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BOR          as u32] = proc __inline__ () : ast return borexpr.create()
+    new_bin_expr_from_op_jump_table[Op.AND          as u32] = proc __inline__ () : ast return andexpr.create()
+    new_bin_expr_from_op_jump_table[Op.OR           as u32] = proc __inline__ () : ast return orexpr.create()
+    new_bin_expr_from_op_jump_table[Op.ASSIGN       as u32] = proc __inline__ () : ast return assignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MULT_ASSIGN  as u32] = proc __inline__ () : ast return multassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.DIV_ASSIGN   as u32] = proc __inline__ () : ast return divassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MOD_ASSIGN   as u32] = proc __inline__ () : ast return modassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.PLUS_ASSIGN  as u32] = proc __inline__ () : ast return plusassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MINUS_ASSIGN as u32] = proc __inline__ () : ast return minusassignexpr.create()
 }

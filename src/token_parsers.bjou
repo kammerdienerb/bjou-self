@@ -51,6 +51,11 @@ proc is_kwd(str : char*, len : u64) : char* {
 proc text_match_parser(text : char*, buff : char[] ref, dst : (string ref | none)) : int {
     p  := 0u64
     ch := 0 as char
+
+    if |buff| < cstrlen(text) {
+        return 0
+    }
+
     while (ch = @text)
     and   good_idx(buff, p) {
         if buff[p] != ch {
@@ -1142,10 +1147,6 @@ type float_literal {
         return p
     }
 }
-
-proc init_parse_table() {
-}
-
 
 proc __inline__ good_idx(buff : char[], p : u64) : bool
     return  p < |buff|

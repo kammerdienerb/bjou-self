@@ -1,0 +1,25 @@
+# c_backend.bjou
+
+module c_backend
+
+using import "io.bjou"
+
+using import "globals.bjou"
+
+type c_backend {
+    intermediate_file : file
+
+
+    proc create() : c_backend {
+        return { c_backend: }
+    }
+
+    proc go(this) {
+        path := compil.output_file_name.copy()
+        path.append(".c")
+
+        intermediate_file := file.open(path.c_str(), file.WRITE)
+
+        intermediate_file.close()
+    }
+}
