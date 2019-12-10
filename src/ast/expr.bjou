@@ -116,7 +116,7 @@ type integerliteral extends exprbase {
         if this.is_hex {
             # @libc
             sscanf(s.c_str(), "%llx", &this.u_val)
-            
+
             this.is_signed = false
 
             bytes := (s.len() - 2) bshr 1
@@ -149,11 +149,11 @@ type integerliteral extends exprbase {
                 sscanf(s.c_str(), "%llu", &this.u_val)
             }
         }
-    
+
         suffix.free()
 
         # We own s, but don't need it any more. Free it.
-        s.free() 
+        s.free()
     }
 
     proc create(s : string ref) : integerliteral {
@@ -180,15 +180,15 @@ type integerliteral extends exprbase {
                 .report()
                 .free()
         }
-        
+
         if this.has_suffix and not this.is_signed and this.has_neg {
             ui::error_builder.create()
                 .with_message("Literal is negative, but type suffix specifies unsigned.")
                 .add_location(this.cxt)
                 .report()
         }
-        
-        fits := true 
+
+        fits := true
         if this.is_signed {
             fits = int_fits_in_width(this.s_val, this.width)
         } else {
@@ -305,7 +305,7 @@ type qidentifier extends exprbase {
     sym_mod       : string
     template_inst : astref
 
-    
+
     proc init(this) {
         exprbase.init(this)
     }
@@ -315,13 +315,13 @@ type qidentifier extends exprbase {
         r.init()
         return r
     }
-    
+
     proc create(name : char*) : qidentifier {
         r := qidentifier.create()
         r.sym_name.set(name)
         return r
     }
-    
+
     proc create(name : string) : qidentifier {
         r := qidentifier.create()
         r.sym_name.set(name)
@@ -333,7 +333,7 @@ type namedarg extends exprbase {
     name : string
     expr : astref
 
-    
+
     proc init(this) {
         exprbase.init(this)
     }
@@ -519,7 +519,7 @@ type callexpr extends binexprbase {
 
 type deleteexpr extends exprbase {
     right : astref
-    
+
 
     proc init(this) {
         exprbase.init(this)

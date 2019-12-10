@@ -2,6 +2,58 @@
 
 module ty
 
-type ty {
+using import "utils.bjou"
 
+type ty    = (tyint | tyfloat | typointer | tystruct | tytemplatestruct | tyenum | tyunknown)
+type tyref = (ty ref | none)
+
+type tyunknown {}
+type tyint { }
+type tyfloat { }
+type typointer { }
+
+type tystruct {
+    field_types : tyref[...]
+
+    proc create_from_node(node : ast ref) : tystruct {
+        t := { tystruct: }
+
+        t.field_types = [...tyref]
+
+        if s : typedef = node {
+            foreach decl in s.declarations {
+                # @unsafe
+                # The parser won't allow nodes in typedef.declarations to be 'nothing'.
+                f_node := unsafe_ast_ref(decl)
+
+                if f : vardecl = f_node {
+                    # @unsafe
+                    # The parser ensures that the vardecl has a type_decl.
+                    type_decl_node := unsafe_ast_ref(f.type_decl)
+                    field_t        := declarator_to_ty(type_decl_node)
+
+                    t.field_types.push(field_t)
+                }
+            }
+        } else {
+            debug_assert(false, "node is not a typedef")
+        }
+
+        return t
+    }
 }
+
+type tyenum {
+    names : string[...]
+
+    proc create_from_node(node : ast ref) : tyenum {
+        return { tyenum: }
+    }
+}
+
+type tytemplatestruct {
+    proc create_from_node(node : ast ref) : tytemplatestruct {
+        return { tytemplatestruct: }
+    }
+}
+

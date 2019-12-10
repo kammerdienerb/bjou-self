@@ -1,8 +1,7 @@
 # typed.bjou
 
 abstract type typed extends astbase {
-    ty : (ty ref | none)
+    ty : tyref
 
-    
     proc init(this) { astbase.init(this) }
 }

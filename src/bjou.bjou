@@ -29,14 +29,15 @@ proc main() {
         return
     }
 
+#     args.show()
+
     if not |args.input|    { ui::error("No input files!") }
-    
+
     main_init()
 
     the_compil := compilation.create(args)
     arg_parser.free()
 
-    # args.show()
     setup_default_compilation(the_compil)
     start_default_compilation()
 
@@ -64,7 +65,7 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
     no_parallel    := arg_parser.addSwitch("no-parallel")
                         .withDesc("Turn off compilation parallelization.")
     threads        := arg_parser.addValueInt("threads")
-                        .withDesc("The number of threads to be used in parallel compilation.")
+                        .withDesc("The number of threads to be used in parallel compilation.\n    A value of -1 indicates that a thread for each CPU core should be used.\n    (default value: -1)")
     stats          := arg_parser.addSwitch("stats")
                         .withDesc("Print compilation statistics to STDOUT.")
     stats_no_files := arg_parser.addSwitch("stats-no-files")
@@ -80,7 +81,7 @@ proc parse_arguments(arg_parser : cli::ArgParser ref, args : ui::argset ref) : b
     march          := arg_parser.addValueString("march")
                         .withDesc("Architecture string to target.")
     backend        := arg_parser.addValueString("backend")
-                        .withDesc("Compiler backend to target. (valid values are 'c' or 'llvm')")
+                        .withDesc("Compiler backend to target. (valid values are 'c' or 'llvm')\n    (default value: 'c')")
     searchpath     := arg_parser.addMultiValueString('I', "searchpath")
                         .withDesc("Add a path to search when looking for modules.")
     link           := arg_parser.addMultiValueString('l', "link")

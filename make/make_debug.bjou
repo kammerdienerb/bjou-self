@@ -17,13 +17,13 @@ import "build.bjou"
         options.files.push(f)
 
     options.link.push("pthread")
-    
-    options.module_search_paths.push("src") 
-    # options.module_search_paths.push("getRSS") 
+
+    options.module_search_paths.push("src")
+    # options.module_search_paths.push("getRSS")
     # options.files.push("getRSS/libgetRSS.a")
 
     # generate defs
-    defs_path := "src/defs.bjou" 
+    defs_path := "src/defs.bjou"
     print "generating '%'", defs_path
     defs := build::DefsFile.create(defs_path, "defs")
     defs.add_def("BJOU_DEBUG", true)

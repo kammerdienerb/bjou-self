@@ -42,9 +42,10 @@ type argset {
     ignored        : string[...]
 
     proc create() : argset {
-        return { argset: 
+        # Here's where default argument values should be set.
+        return { argset:
             .input      = [...string],
-            .backend    = str(),
+            .backend    = str("c"),
             .mfeat      = str(),
             .march      = str(),
             .threads    = -1,
@@ -67,7 +68,7 @@ type argset {
             f.free()
         this.input.free()
     }
-    
+
     proc show(this) {
         if |this.input| {
             print    "input files    = ["
@@ -142,7 +143,7 @@ abstract type error_builder_base {
     message   : string
     pieces : error_piece[...]
 
-    
+
     proc free(this) {
         foreach ref piece in this.pieces {
             if note : error_note = piece {
@@ -160,19 +161,19 @@ abstract type error_builder_base {
     }
 
     proc with_message(this, msg : char*)    { this.message.set(msg)       }
-    
+
     proc add_note(this, note : char*)       { this.pieces.push(str(note)) }
-    
+
     proc add_location(this, msg : char*, cxt : context) {
         s : (string | none) = str(msg)
         this.pieces.push((s, cxt))
     }
-    
+
     proc add_location(this, cxt : context) {
         s : (string | none) = nothing
         this.pieces.push((s, cxt))
     }
-    
+
     proc report_piece(this, piece : error_piece ref, source_highlight_attr : Attr) {
         if note : error_note = piece {
             note'  := note.copy()
@@ -180,15 +181,15 @@ abstract type error_builder_base {
             note'' := str("   *** ")
             note''.append(note')
             file.stderr().write(note'')
-            file.stderr().write("\n", 1) 
+            file.stderr().write("\n", 1)
             note''.free()
             note'.free()
         } else if loc : error_location = piece {
             if msg : string = loc.0 {
                 msg' := msg.copy()
                 strattr(msg', get_attr(Attr.GREEN))
-                file.stderr().write(msg') 
-                file.stderr().write("\n", 1) 
+                file.stderr().write(msg')
+                file.stderr().write("\n", 1)
                 msg'.free()
             }
             highlight_source_location(loc.1, source_highlight_attr)
@@ -199,12 +200,12 @@ abstract type error_builder_base {
 type error_builder extends error_builder_base {
     fatal     : bool
 
-    
+
     proc is_fatal(this, f : bool) : error_builder ref {
         this.fatal = f
         return this
     }
-    
+
     proc with_message(this, msg : char*) : error_builder ref {
         error_builder_base.with_message(this, msg)
         return this
@@ -214,12 +215,12 @@ type error_builder extends error_builder_base {
         error_builder_base.add_note(this, note)
         return this
     }
-    
+
     proc add_location(this, msg : char*, cxt : context) : error_builder ref {
         error_builder_base.add_location(this, msg, cxt)
         return this
     }
-    
+
     proc add_location(this, cxt : context) : error_builder ref {
         error_builder_base.add_location(this, cxt)
         return this
@@ -250,8 +251,8 @@ type error_builder extends error_builder_base {
         if |this.pieces| > 0    { file.stderr().write("\n", 1) }
 
         if this.fatal    { __sys::exit(1) }
-        
-        output_lock.unlock()    
+
+        output_lock.unlock()
         return this
     }
 }
@@ -266,7 +267,7 @@ type warning_builder extends error_builder_base {
 
         return @r
     }
-    
+
     proc with_message(this, msg : char*) : warning_builder ref {
         error_builder_base.with_message(this, msg)
         return this
@@ -276,12 +277,12 @@ type warning_builder extends error_builder_base {
         error_builder_base.add_note(this, note)
         return this
     }
-    
+
     proc add_location(this, msg : char*, cxt : context) : warning_builder ref {
         error_builder_base.add_location(this, msg, cxt)
         return this
     }
-    
+
     proc add_location(this, cxt : context) : warning_builder ref {
         error_builder_base.add_location(this, cxt)
         return this
@@ -299,8 +300,8 @@ type warning_builder extends error_builder_base {
             idx += 1
         }
         if |this.pieces| > 0    { file.stderr().write("\n", 1) }
-        
-        output_lock.unlock()    
+
+        output_lock.unlock()
 
         return this
     }
@@ -412,7 +413,7 @@ proc write_context_header(cxt : context ref) {
 
 proc highlight_source_location(cxt : context ref, attr : Attr) {
     write_context_header(cxt)
- 
+
     f          := { file: }
     path_c_str := ""
 
@@ -422,7 +423,7 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
     } else {
         \die { "context does not have a path" }
     }
-    
+
     if not f.good()    \die{ "could not open file" }
 
     file_contents      := f.read()
@@ -599,7 +600,7 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
         file.stderr().write(lines[n_lines_printed])
         n_lines_printed += 1
     }
-                
+
     if  lines[n_lines_printed - 1].len()
     and lines[n_lines_printed - 1].back() != '\n' {
         file.stderr().write("\n", 1)
@@ -614,13 +615,13 @@ proc error(message : char*) {
 }
 
 proc error(message : string ref, fatal : bool) {
-    output_lock.lock() 
+    output_lock.lock()
 
     write_error(message)
 
     if fatal    { __sys::exit(1) }
-    
-    output_lock.unlock() 
+
+    output_lock.unlock()
 }
 
 proc write_error(message : string ref) {
@@ -669,7 +670,7 @@ proc report_phase_time(phase : char*, ms : u64, attr : Attr) {
     output_lock.lock()
 
     file.stdout().write(line)
-    
+
     output_lock.unlock()
     line.free()
 }
@@ -692,7 +693,7 @@ proc report_phase_time(phase : char*, ms : u64, attr1 : Attr, attr2 : Attr) {
     output_lock.lock()
 
     file.stdout().write(line)
-    
+
     output_lock.unlock()
     line.free()
 }
@@ -710,7 +711,7 @@ proc report_lines_per_s(total_lines : u64, code_lines : u64, ms : u64, attr1 : A
         total_rate = str(((total_lines as f32) / s) as i64)
         code_rate  = str(((code_lines as f32) / s) as i64)
     }
-    
+
     line1 := concat(str(total_lines), str(" lines of text @ "), total_rate, str(" lines/s"))
     line1.append('\n')
     line2 := concat(str(code_lines),  str(" lines of code @ "), code_rate,  str(" lines/s"))
@@ -725,7 +726,7 @@ proc report_lines_per_s(total_lines : u64, code_lines : u64, ms : u64, attr1 : A
 
     file.stdout().write(line1)
     file.stdout().write(line2)
-    
+
     output_lock.unlock()
 
     line2.free()
@@ -745,7 +746,7 @@ proc report_bytes_per_s(n_bytes : u64, ms : u64, attr1 : Attr, attr2 : Attr) {
     }
 
     pretty_rate.append("/s")
-   
+
     pretty_n := pretty_bytes(n_bytes)
 
     line := concat(pretty_n, str(" @ "), pretty_rate)
@@ -757,7 +758,7 @@ proc report_bytes_per_s(n_bytes : u64, ms : u64, attr1 : Attr, attr2 : Attr) {
     output_lock.lock()
 
     file.stdout().write(line)
-    
+
     output_lock.unlock()
 
     line.free()
@@ -774,7 +775,7 @@ proc report_peak_rss(mem_used : u64, ms : u64, attr1 : Attr, attr2 : Attr) {
     output_lock.lock()
 
     file.stdout().write(line)
-    
+
     output_lock.unlock()
 
     line.free()

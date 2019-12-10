@@ -37,7 +37,7 @@ type scope {
     symbols      : symbol_table
     overloads    : overload_table
 
-   
+
     proc create_common(parent_scope : scope ref) : scope {
         return { scope:
             .parent_scope = parent_scope,
@@ -98,8 +98,8 @@ type module_scope_table = hash_table$(string, i32, str_hasher)
 
 type globalscope extends scope {
     module_scopes : module_scope_table
-    
-    
+
+
     proc create() : globalscope {
         return { globalscope:
             .sub_scopes         = [...scope],
@@ -158,17 +158,31 @@ proc find_in_scope(s : scope ref, name : string ref) : (ast ref | overload_set r
     return nothing
 }
 
-proc add_nodes_to_top_level_scope(global_scope : globalscope ref, nodes : bucket_array$astref ref) {
+proc add_nodes_to_top_level_scope(global_scope : globalscope ref, nodes : bucket_array$astref ref, type_nodes : bucket_array$astref ref) {
     for it := nodes.iter(); not it.is_end(); it.next() {
         m_node := it.val()
         if node : ast ref = m_node {
-            add_single_node_to_top_level_scope(global_scope, node)
+            add_single_node_to_top_level_scope(global_scope, node, type_nodes)
         }
     }
 }
 
-proc add_single_node_to_top_level_scope(global_scope : globalscope ref, node : ast ref) {
+proc add_single_node_to_top_level_scope(global_scope : globalscope ref, node : ast ref, type_nodes : bucket_array$astref ref) {
     if decl : declaration = node {
+        # If this node defines a type, add it to type_nodes so that it can
+        # be worked on later when building the type table.
+        if      type_node : typedef         = node { type_nodes.push(node) }
+        else if type_node : templatetypedef = node { type_nodes.push(node) }
+        else if type_node : enumdef         = node { type_nodes.push(node) }
+
+
+        # Do this first so that the typedef declaration names don't
+        # have the module prefix yet.
+        # This avoid double prepending the module name.
+        if ty_def : typedef = node {
+            add_typedef_declarations_to_top_level_scope(global_scope, ty_def, type_nodes)
+        }
+
         module_idx := unsafe_baseref(node).module_idx
         if module_idx == -1 {
             add_to_scope(global_scope, node)
@@ -176,17 +190,14 @@ proc add_single_node_to_top_level_scope(global_scope : globalscope ref, node : a
             module_scope := global_scope.get_module_scope_by_idx(module_idx)
             add_to_scope(module_scope, node)
         }
-        if ty_def : typedef = node {
-            add_typedef_declarations_to_top_level_scope(global_scope, ty_def)
-        }
     } else if inc : includestmt = node {
         if inc_container : include_container ref = inc.container {
-            add_nodes_to_top_level_scope(global_scope, inc_container.nodes)
+            add_nodes_to_top_level_scope(global_scope, inc_container.nodes, type_nodes)
         } else debug_assert(false, "missing include_container for includestmt")
     }
 }
 
-proc add_typedef_declarations_to_top_level_scope(global_scope : globalscope ref, ty_def : typedef) {
+proc add_typedef_declarations_to_top_level_scope(global_scope : globalscope ref, ty_def : typedef, type_nodes : bucket_array$astref ref) {
     foreach child in ty_def.declarations {
         child_node : ast ref = unsafe_ast_ref(child)
         if field : vardecl = child_node {
@@ -194,7 +205,7 @@ proc add_typedef_declarations_to_top_level_scope(global_scope : globalscope ref,
         } else if child_decl : declaration = child_node {
             child_decl.name       = concat(ty_def.name.copy(), str("."), child_decl.name)
             child_decl.module_idx = ty_def.module_idx
-            add_single_node_to_top_level_scope(global_scope, child_node)
+            add_single_node_to_top_level_scope(global_scope, child_node, type_nodes)
         } else debug_assert(false, "what kind of node is in this typedef?")
     }
 }
@@ -273,7 +284,7 @@ proc build_subscope(parent_scope : scope ref, p : procdef ref) {
             add_to_scope(new_scope, node)
         }
     }
-    
+
     build_subscope_block(new_scope, p.stmts)
 
 }
@@ -323,7 +334,7 @@ proc build_subscope(parent_scope : scope ref, d : dowhilestmt ref) {
 proc init_overload(s : scope ref, name : string ref, existing_proc : ast ref, new_proc : ast ref) {
     # Make a new overload_set and move symbols to it.
     # The overload_table is taking ownership of 'name'.
-    
+
     inserted := s.overloads.insert(name, overload_set.create())
     inserted.second.procs.push(existing_proc)
     inserted.second.procs.push(new_proc)

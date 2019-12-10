@@ -136,8 +136,8 @@ type all_stmts =
     | elsestmt
     | forstmt
     | foreachstmt
-    | whilestmt 
-    | dowhilestmt 
+    | whilestmt
+    | dowhilestmt
     | breakstmt
     | continuestmt
     | importstmt

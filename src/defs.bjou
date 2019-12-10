@@ -2,4 +2,4 @@
 
 module defs
 
-const BJOU_DEBUG := 0
+const BJOU_DEBUG := 1

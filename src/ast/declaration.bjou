@@ -15,7 +15,6 @@ type vardecl extends declaration {
     type_decl : astref
     expr      : astref
 
-
     proc init(this) {
         declaration.init(this)
     }
@@ -48,7 +47,7 @@ type procdef extends declaration {
     ret_decl    : astref
     stmts       : astref[...]
 
-    
+
     proc init(this) {
         declaration.init(this)
         this.param_decls = [...astref]

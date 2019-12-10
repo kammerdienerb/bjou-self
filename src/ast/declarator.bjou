@@ -8,7 +8,6 @@ type declaratorbase extends typed {
 
 type declarator extends declaratorbase {
     identifier    : astref
-    template_inst : astref
 
 
     proc init(this) {
@@ -146,4 +145,52 @@ type procdeclarator extends declaratorbase {
         r.init()
         return r
     }
+}
+
+proc declarator_to_ty(node : ast ref) : tyref {
+    t : tyref = nothing
+
+    # @here
+    #
+    # Figuring out how to convert declarators to types and
+    # create the types themselves.
+
+    if decl : declaratorbase = node {
+        if t' : ty ref = decl.ty {
+            t = t'
+        } else {
+            t = compute_ty_from_declarator(node)
+        }
+    } else {
+        debug_assert(false, "node is not a declarator")
+    }
+
+#     if t.is_none() {
+#         ui::warning_builder.create()
+#             .with_message("not a normal decl")
+#             .add_location(unsafe_baseref(node).cxt)
+#             .report()
+#             .free()
+#     }
+#     debug_assert(not t.is_none(), "could not convert declarator to ty")
+
+    return t
+}
+
+proc compute_ty_from_declarator(node : ast ref) : tyref {
+    t : tyref = nothing
+
+    # @here
+
+    if base : declarator = node {
+#         ui::warning_builder.create()
+#             .with_message("normal decl")
+#             .add_location(base.cxt)
+#             .report()
+#             .free()
+
+        m_pair := compil.front.type_table
+    }
+
+    return t
 }
