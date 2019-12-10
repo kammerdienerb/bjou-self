@@ -68,7 +68,7 @@ type parser {
 
         # There is no need to free these bucket_arrays because they are freed
         # in merge_and_steal_data() in transfer_to_fe().
-        
+
         # this.all_nodes.free()
         # this.top_level_nodes.free()
 
@@ -81,7 +81,7 @@ type parser {
 
         this.cur_cxt.file = this.path
         this.cur_cxt.beg  = this.cur_cxt.end = { location: .ln = 1, .ch = 1 }
-        
+
         this.buff     = this.f.read()
         this.buff_ptr = this.buff.data()
         this.f.close()
@@ -89,7 +89,7 @@ type parser {
 
         this.remove_trailing_space()
         this.clean()
-        
+
         while |this.buff| {
             node := this.parse_top_level()
             if node.is_none() {
@@ -97,22 +97,22 @@ type parser {
             } else {
                 # @unsafe
                 # We just checked that it wasn't none above.
-                unsafe_baseref(node).module_idx = this.module_idx               
+                unsafe_baseref(node).module_idx = this.module_idx
 
                 this.top_level_nodes.push(node)
             }
         }
-        
+
         end := measure_time_now_ms()
 
         if compil.args.syntax_only {
             if not this.pool.is_none() { this.fe.node_lock.lock() }
-        
+
             this.fe.n_files       += 1
             this.fe.n_lines       += this.n_lines
             this.fe.n_blank_lines += this.n_blank_lines
             this.fe.n_bytes       += this.n_bytes
-            
+
             if not this.pool.is_none() { this.fe.node_lock.unlock() }
         } else {
             this.transfer_to_fe()
@@ -129,8 +129,8 @@ type parser {
             report_phase_time(report_str.c_str(), end - beg, Attr.YELLOW)
             report_str.free()
         }
-        
-        # Release memory now so that we don't hang on to 
+
+        # Release memory now so that we don't hang on to
         # it until all other threads are done.
         this.free()
     }
@@ -149,7 +149,7 @@ type parser {
 
     proc transfer_to_fe(this) {
         if not this.pool.is_none() { this.fe.node_lock.lock() }
-    
+
         this.fe.n_files       += 1
         this.fe.n_lines       += this.n_lines
         this.fe.n_blank_lines += this.n_blank_lines
@@ -180,7 +180,7 @@ type parser {
         {
             # We found nothing. Return nothing.
         }
-        
+
         return node
     }
 
@@ -191,7 +191,7 @@ type parser {
 
         result    := vardecl.create()
         result.cxt = result.name_cxt = context.from(this.cur_cxt)
-       
+
         this.expect$identifier(result.name, "variable name")
         result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
@@ -206,7 +206,7 @@ type parser {
                 this.error_on_next_token(err_str.c_str())
             }
         }
-       
+
         if this.optional$assign() {
             result.expr = this.parse_expr()
             if result.expr.is_none() {
@@ -233,7 +233,7 @@ type parser {
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         return add(this.all_nodes, result)
     }
-    
+
     proc parse_this_type(this) : astref {
         if not this.optional$kwd_This(skip_eat: true) {
             return nothing
@@ -254,7 +254,7 @@ type parser {
 
         result    := constantdecl.create()
         result.cxt = context.from(this.cur_cxt)
-      
+
         this.eat(5) # 'const'
 
         result.name_cxt = context.from(this.cur_cxt)
@@ -273,8 +273,8 @@ type parser {
                 this.error_on_next_token(err_str.c_str())
             }
         }
-      
-        this.expect$assign("'='")        
+
+        this.expect$assign("'='")
 
         result.expr = this.parse_expr()
         if result.expr.is_none() {
@@ -391,7 +391,7 @@ type parser {
     proc parse_if(this) : astref {
         if not this.optional$kwd_if(skip_eat: true)
             return nothing
-       
+
         result    := ifstmt.create()
         result.cxt = context.from(this.cur_cxt)
 
@@ -419,10 +419,10 @@ type parser {
     proc parse_else(this) : astref {
         if not this.optional$kwd_else(skip_eat: true)
             return nothing
-       
+
         result    := elsestmt.create()
         result.cxt = context.from(this.cur_cxt)
-        
+
         result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(4) # 'else'
@@ -435,10 +435,10 @@ type parser {
     proc parse_foreach(this) : astref {
         if not this.optional$kwd_foreach(skip_eat: true)
             return nothing
-       
+
         result    := foreachstmt.create()
         result.cxt = context.from(this.cur_cxt)
-        
+
         result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(7) # 'foreach'
@@ -472,10 +472,10 @@ type parser {
     proc parse_for(this) : astref {
         if not this.optional$kwd_for(skip_eat: true)
             return nothing
-       
+
         result    := forstmt.create()
         result.cxt = context.from(this.cur_cxt)
-        
+
         result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(3) # 'for'
@@ -503,10 +503,10 @@ type parser {
     proc parse_while(this) : astref {
         if not this.optional$kwd_while(skip_eat: true)
             return nothing
-       
+
         result    := whilestmt.create()
         result.cxt = context.from(this.cur_cxt)
-        
+
         result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(5) # 'while'
@@ -530,10 +530,10 @@ type parser {
     proc parse_dowhile(this) : astref {
         if not this.optional$kwd_do(skip_eat: true)
             return nothing
-       
+
         result    := dowhilestmt.create()
         result.cxt = context.from(this.cur_cxt)
-        
+
         result.set_flag(ast_flag.OPENS_SCOPE)
 
         this.eat(2) # 'do'
@@ -596,7 +596,7 @@ type parser {
             }
         }
         this.expect$r_brace("'}'")
-        
+
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         return add(this.all_nodes, result)
     }
@@ -668,7 +668,7 @@ type parser {
                 p.inc_container    = container
                 p.introduction_cxt = intro_cxt
                 p.module_idx       = this.module_idx
-                    
+
                 pool.add_task(async_parser_wrapper, p)
             } else {
                 frontend::multiple_include_error(path, intro_cxt)
@@ -722,7 +722,7 @@ type parser {
 
         result    := usingstmt.create()
         result.cxt = context.from(this.cur_cxt)
-        
+
         this.eat(5) # 'using'
 
         result.imprt = this.parse_import()
@@ -740,7 +740,7 @@ type parser {
     proc parse_include(this) : astref {
         if not this.optional$kwd_include(skip_eat: true)
             return nothing
-        
+
         result    := includestmt.create()
         result.cxt = context.from(this.cur_cxt)
 
@@ -804,14 +804,14 @@ type parser {
 
         no_mangle := this.optional$kwd___no_mangle__()
         is_inline := this.optional$kwd___inline__()
-        
+
         result.name_cxt = context.from(this.cur_cxt)
 
         if no_mangle    { result.set_flag(ast_flag.NO_MANGLE) }
         if is_inline    { result.set_flag(ast_flag.IS_INLINE) }
 
         result.set_flag(ast_flag.OPENS_SCOPE)
-      
+
         ident := { string: }
         has_ident := this.optional$identifier(ident)
         result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
@@ -910,7 +910,7 @@ type parser {
                 ident := { string: }
                 this.expect$identifier(ident, "template parameter name")
                 result.names.push(ident)
-                
+
                 if not this.optional$comma() {
                     this.expect$r_paren("')'")
                     break
@@ -929,7 +929,7 @@ type parser {
             this.expect$identifier(ident, "template parameter name")
             result.names.push(ident)
         }
-        
+
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
@@ -956,7 +956,7 @@ type parser {
         template_result.name     = result.name.copy()
         template_result.name_cxt = result.name_cxt
 
-        template_def := this.parse_template_def() 
+        template_def := this.parse_template_def()
 
         if this.optional$assign() {
             if is_abstract {
@@ -983,6 +983,20 @@ type parser {
             while true {
                 decl := this.parse_declaration()
                 if decl.is_none() { break }
+
+                # @unsafe
+                # We just 'break'ed above if this wasn't okay.
+                if field : vardecl = unsafe_ast_ref(decl) {
+                    if not field.expr.is_none() {
+                    error_builder.create()
+                        .with_message("Struct fields may not be initialized.")
+                        # @unsafe
+                        # Just checked that it isn't nothing.
+                        .add_location(unsafe_baseref(field.expr).cxt)
+                        .report()
+                    }
+                }
+
                 result.declarations.push(decl)
             }
             this.expect$r_brace("'}'")
@@ -1114,7 +1128,7 @@ type parser {
 
         return add(this.all_nodes, result)
     }
-    
+
     proc parse_extern_var(this) : astref {
         result := this.parse_var_decl()
 
@@ -1146,11 +1160,11 @@ type parser {
 
         result : astref = nothing
         right  : astref = nothing
-        
+
         # lookahead := peek next token
         # while lookahead is a binary operator whose precedence is >= min_precedence
         #     op := lookahead
-       
+
         op := Op.INVALID
         while (op = this.look_ahead_binary_op()) != Op.INVALID
         and    prec(op) >= min_precedence {
@@ -1231,7 +1245,7 @@ type parser {
             }
 
             # lhs := the result of applying op with operands lhs and rhs
-           
+
             result = this.new_bin_expr_from_op(op)
             debug_assert(not result.is_none(), "result is nothing")
             # @unsafe
@@ -1298,7 +1312,7 @@ type parser {
         if cast.type_decl.is_none() {
             this.error_on_next_token("Expected type declarator for 'as' type cast.")
         }
-        
+
         cast.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         cast_slot := add(this.all_nodes, cast)
@@ -1337,12 +1351,12 @@ type parser {
 
     proc parse_operand(this) : astref {
         op  := this.look_ahead_unary_prefix_op()
-        
+
         if op == Op.INVALID {
             leaf := this.parse_leaf_expr()
             return leaf
         }
-        
+
         cxt := context.from(this.cur_cxt)
 
         result : astref = nothing
@@ -1378,7 +1392,7 @@ type parser {
                 result  = add(this.all_nodes, n)
             } else if op == Op.ADDR {
                 this.eat(1) # '&'
-                
+
                 a      := addrexpr.create()
                 a.right = this.parse_operand()
                 if a.right.is_none() {
@@ -1388,7 +1402,7 @@ type parser {
                 result  = add(this.all_nodes, a)
             } else if op == Op.DEREF {
                 this.eat(1) # '@'
-                
+
                 d      := derefexpr.create()
                 d.right = this.parse_operand()
                 if d.right.is_none() {
@@ -1398,7 +1412,7 @@ type parser {
                 result  = add(this.all_nodes, d)
             } else if op == Op.BNEG {
                 this.eat(4) # 'bneg'
-                
+
                 b      := bnegexpr.create()
                 b.right = this.parse_operand()
                 if b.right.is_none() {
@@ -1408,7 +1422,7 @@ type parser {
                 result  = add(this.all_nodes, b)
             } else if op == Op.DELETE {
                 this.eat(6) # 'delete'
-                
+
                 d      := deleteexpr.create()
                 d.right = this.parse_operand()
                 if d.right.is_none() {
@@ -1427,14 +1441,14 @@ type parser {
             unsafe_baseref(result).cxt = cxt
             return result
         }
-        
+
         cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         # @unsafe
         # All successful branches give us a valid result.
         unsafe_baseref(result).cxt = cxt
 
         result = this.parse_expr_more(result, HIGHEST_BIN_PREC)
-        
+
         return result
     }
 
@@ -1445,7 +1459,7 @@ type parser {
         # @performance
         # It might be beneficial to reorder these so that the most common operators
         # are checked first, saving some branches on the average case.
-        # NOTE: started this, but I've not really done any measurment.
+        # NOTE: started this, but I've not really done any measurement.
         # NOTE the second: The order of some of these are sensitive. e.g.
         # LEQ must come before LSS.
 
@@ -1489,14 +1503,14 @@ type parser {
         if      this.optional$kwd_not    (skip_eat: true) { op = Op.NOT    }
         else if this.optional$ampersand  (skip_eat: true) { op = Op.ADDR   }
         else if this.optional$at         (skip_eat: true) { op = Op.DEREF  }
-        else if this.optional$kwd_new    (skip_eat: true) { op = Op.NEW    }   
+        else if this.optional$kwd_new    (skip_eat: true) { op = Op.NEW    }
         else if this.optional$kwd_delete (skip_eat: true) { op = Op.DELETE }
         else if this.optional$kwd_bneg   (skip_eat: true) { op = Op.BNEG   }
         else if this.optional$kwd_sizeof (skip_eat: true) { op = Op.SIZEOF }
 
         return op
     }
-    
+
     proc parse_leaf_expr(this) : astref {
         direct := this.parse_directive()
         if not direct.is_none()
@@ -1568,7 +1582,7 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
         this.expect$identifier(result.name, "identifier")
         this.eat(1) # ':'
-        
+
         result.expr = this.parse_expr()
 
         if result.expr.is_none() {
@@ -1592,13 +1606,13 @@ type parser {
         } else {
             if not this.optional$identifier(name)                { return nothing }
         }
-    
+
         result := qidentifier.create()
         if this.optional$double_colon() {
             result.sym_mod = name
             this.expect$identifier(result.sym_name, "identifier")
         } else {
-            result.sym_name = name 
+            result.sym_name = name
         }
 
         result.template_inst = this.parse_template_inst()
@@ -1661,7 +1675,7 @@ type parser {
             }
             this.error_on_next_token("Invalid expression.")
         }
-        
+
         # @unsafe below
         # 'result' must be valid here. parse_expr() must have succeeded to get here.
         # Might get overwritten with a new tupleliteral node, but that is valid too.
@@ -1685,7 +1699,7 @@ type parser {
         } else {
             unsafe_baseref(expr_result).set_flag(ast_flag.PAREN)
         }
-            
+
         this.expect$r_paren("')'")
         cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         if tup {
@@ -1695,7 +1709,7 @@ type parser {
         unsafe_baseref(expr_result).cxt = cxt
         return expr_result
     }
-       
+
     proc parse_initializer_list(this) : astref {
         if not this.optional$l_brace(skip_eat: true)
             return nothing
@@ -1704,7 +1718,7 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         this.eat(1) # '{'
-        
+
         if this.optional$r_brace() {
             result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
             ui::error_builder.create()
@@ -1737,7 +1751,7 @@ type parser {
                 this.expect$assign("'=' for type field initialization")
                 expr := this.parse_expr()
                 if expr.is_none() {
-                    this.error_on_next_token("Invalid expression in initializer list.") 
+                    this.error_on_next_token("Invalid expression in initializer list.")
                 }
                 result.exprs.push(expr)
                 if not this.optional$comma() {
@@ -1872,8 +1886,10 @@ type parser {
 
         if not base_only and this.optional$lss(skip_eat: true) {
             result = this.parse_proc_declarator()
+            debug_assert(not result.is_none(), "parse_proc_declarator failed unexpectedly")
         } else if not base_only and this.optional$l_paren(skip_eat: true) {
             result = this.parse_tuple_or_sum_declarator()
+            debug_assert(not result.is_none(), "parse_tuple_or_sum_declarator failed unexpectedly")
         } else if ident : ast ref = this.parse_qualified_identifier() {
             d           := declarator.create()
             d.cxt        = cxt
@@ -1889,14 +1905,17 @@ type parser {
                 if this.optional$l_bracket() {
                     if this.optional$ellipsis() {
                         d          := dynamicarraydeclarator.create()
+                        d.cxt       = cxt
                         d.elem_decl = result
                         result      = add(this.all_nodes, d)
                     } else if this.optional$r_bracket(skip_eat: true) {
                         s          := slicedeclarator.create()
+                        s.cxt       = cxt
                         s.elem_decl = result
                         result      = add(this.all_nodes, s)
                     } else {
                         a          := arraydeclarator.create()
+                        a.cxt       = cxt
                         a.elem_decl = result
                         a.expr      = this.parse_expr()
                         if a.expr.is_none() {
@@ -1912,10 +1931,12 @@ type parser {
                     this.expect$r_bracket("']'")
                 } else if this.optional$asterisk() {
                     p          := pointerdeclarator.create()
+                    p.cxt       = cxt
                     p.elem_decl = result
                     result      = add(this.all_nodes, p)
                 } else if this.optional$kwd_ref() {
                     r          := refdeclarator.create()
+                    r.cxt       = cxt
                     r.elem_decl = result
                     result      = add(this.all_nodes, r)
                 } else {
@@ -1929,13 +1950,18 @@ type parser {
             }
         }
 
+        # @unsafe
+        # The loop and the if/else chain before it always produce a valid result
+        # node or return from the procedure.
+        unsafe_baseref(result).cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+
         return result
     }
 
     proc parse_proc_declarator(this) : astref {
         if not this.optional$lss(skip_eat: true)
             return nothing
-        
+
         result   := procdeclarator.create()
         c_vararg := false
 
@@ -1954,7 +1980,7 @@ type parser {
                 }
 
                 param_decl := this.parse_declarator()
-                
+
                 if param_decl.is_none() {
                     this.error_on_next_token("Expected type declarator in argument list for procedure type declarator.")
                 }
@@ -2031,12 +2057,12 @@ type parser {
                 if not this.optional$comma() {
                     this.expect$r_paren("')'")
                     break
-                } 
+                }
             } else {
                 if not this.optional$pipe() {
                     this.expect$r_paren("')'")
                     break
-                } 
+                }
             }
         }
 
@@ -2046,18 +2072,18 @@ type parser {
             eb := ui::error_builder.create()
             if tuple_or_sum_kind == 1
                 eb = eb.with_message("Tuple types must have at least 2 sub types.")
-            else  
+            else
                 eb = eb.with_message("Sum types must have at least 2 sub types.")
-            
+
             eb.add_location(cxt)
               .report()
         }
-        
+
         # @unsafe
         # Either a sum or tuple declarator must be correctly formed by this point.
         unsafe_baseref(result).cxt = cxt
 
-        return result
+        return add(this.all_nodes, result)
     }
 
     proc consume_comment(this) {
@@ -2094,7 +2120,7 @@ type parser {
                     } else {
                         seen_first_nl = true
                     }
-                } else { 
+                } else {
                     this.cur_cxt.end.ch += 1
                 }
                 this.buff.advance(1)
@@ -2145,7 +2171,7 @@ type parser {
         if not skip_clean
             this.clean()
     }
-   
+
     proc expect$parser_T(this, s : char*) {
         this.expect$parser_T(nothing, s)
     }
@@ -2200,7 +2226,7 @@ type parser {
                 this.cur_cxt.end.ln += 1
                 this.cur_cxt.end.ch  = 1
             }
-           
+
             \static_if{ \same_type{ parser_T string_literal }
                 if dst' : string ref = dst
                     dst' = str_lit_str
@@ -2237,7 +2263,7 @@ type async_parser extends parser {
     proc init(this, f : file, kind : parserkind) {
         parser.init(this, f, kind)
     }
-    
+
     proc create(fe : frontend ref, pool : threadpool ref, path : string ref, f : file, kind : parserkind) : async_parser {
         r := { async_parser: .fe = fe, .pool = pool, .path = path }
         r.init(f, kind)
@@ -2287,7 +2313,7 @@ proc get_ch_val(s : string ref, beg : location, path : (string ref | none) ref) 
 
         if r != (-1 as char)
             return r
-        
+
         msg = concat(str("Unknown escape code '"), str(ch), str("'."))
         c.beg.ch += 2
         c.end.ch -= 2
