@@ -594,6 +594,7 @@ type parser {
             if (node = this.parse_declarator()).is_none() {
                 break
             }
+            result.args.push(node)
         }
         this.expect$r_brace("'}'")
 
@@ -1315,11 +1316,11 @@ type parser {
 
         cast.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        cast_slot := add(this.all_nodes, cast)
 
         if bin_op == Op.INVALID
         or ((min_precedence == 0) and (bin_prec > as_prec)) {
             cast.expr = expr
+            cast_slot := add(this.all_nodes, cast)
             result = cast_slot
         } else if (bin_op != Op.INVALID) and (bin_prec <= as_prec) {
             # @unsafe
@@ -1328,6 +1329,7 @@ type parser {
             right_cxt   := unsafe_baseref(right).cxt
             cast.expr    = right
             cast.cxt.beg = right_cxt.beg
+            cast_slot := add(this.all_nodes, cast)
             # @unsafe
             # See above note.
             bin_expr := refcast$binexprbase(unsafe_baseref(result))
@@ -1682,7 +1684,7 @@ type parser {
         tup := false
         if this.optional$comma() {
             t := tupleliteral.create()
-            t.exprs.push(result)
+            t.exprs.push(expr_result)
 
             while not this.optional$r_paren() {
                 e := this.parse_expr()
@@ -2017,6 +2019,8 @@ type parser {
             return nothing
 
         result : ast = nothing
+        _tup   := NULL as tupledeclarator*
+        _sum   := NULL as sumdeclarator*
 
         tuple_or_sum_kind      := 0 # 0 = unknown, 1 = tuple, 2 = sum
         n_decls                := 0
@@ -2041,6 +2045,14 @@ type parser {
             this.expect$r_paren("')'") # just error here
         }
 
+        if t : tupledeclarator = result {
+            _tup = &t
+            t.sub_decls.push(first_decl)
+        } else if s : sumdeclarator = result {
+            _sum = &s
+            s.option_decls.push(first_decl)
+        }
+
         while not this.optional$r_paren() {
             sub_decl := this.parse_declarator()
             if sub_decl.is_none() {
@@ -2054,11 +2066,13 @@ type parser {
             n_decls += 1
 
             if tuple_or_sum_kind == 1 {
+                _tup.sub_decls.push(sub_decl)
                 if not this.optional$comma() {
                     this.expect$r_paren("')'")
                     break
                 }
             } else {
+                _sum.option_decls.push(sub_decl)
                 if not this.optional$pipe() {
                     this.expect$r_paren("')'")
                     break

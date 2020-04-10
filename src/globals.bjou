@@ -13,7 +13,7 @@ output_lock : mutex
 # @winpath
 const SYSTEM_MODULE_PATH := "/usr/local/lib/bjou/modules/"
 
-const seahorse_logo := 
+const seahorse_logo :=
 "                      $$
                        $$
                   =$$$$$$$

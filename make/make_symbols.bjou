@@ -12,22 +12,23 @@ import "build.bjou"
 
     # options.verbose = true
     options.symbols = true
-    options.opt   = true
+    options.opt   = false
     options.noabc = true
     options.nolld = true
+    options.front = true
 
     foreach f in sources
         options.files.push(f)
 
     options.link.push("pthread")
     # options.link.push("tcmalloc")
-    
-    options.module_search_paths.push("src") 
-    # options.module_search_paths.push("getRSS") 
+
+    options.module_search_paths.push("src")
+    # options.module_search_paths.push("getRSS")
     # options.files.push("getRSS/libgetRSS.a")
 
     # generate defs
-    defs_path := "src/defs.bjou" 
+    defs_path := "src/defs.bjou"
     print "generating '%'", defs_path
     defs := build::DefsFile.create(defs_path, "defs")
     defs.add_def("BJOU_DEBUG", true)

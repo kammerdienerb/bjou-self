@@ -11,6 +11,10 @@ type breakstmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
+    }
 }
 
 type continuestmt extends statement {
@@ -22,6 +26,10 @@ type continuestmt extends statement {
         r := { continuestmt: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
     }
 }
 
@@ -40,6 +48,23 @@ type dowhilestmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        foreach ref s in this.stmts {
+            if visit(unsafe_ast_ref(s), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
+    }
 }
 
 type elsestmt extends statement {
@@ -55,6 +80,19 @@ type elsestmt extends statement {
         r := { elsestmt: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        foreach ref s in this.stmts {
+            if visit(unsafe_ast_ref(s), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
     }
 }
 
@@ -73,6 +111,27 @@ type foreachstmt extends statement {
         r := { foreachstmt: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if visit(unsafe_ast_ref(this.var), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        if visit(unsafe_ast_ref(this.expr), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        foreach ref s in this.stmts {
+            if visit(unsafe_ast_ref(s), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
     }
 }
 
@@ -93,6 +152,33 @@ type forstmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if i : ast ref = this.ini {
+            if visit(i, visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        if visit(unsafe_ast_ref(this.step), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        foreach ref s in this.stmts {
+            if visit(unsafe_ast_ref(s), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
+    }
 }
 
 type ifstmt extends statement {
@@ -111,10 +197,33 @@ type ifstmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        foreach ref s in this.stmts {
+            if visit(unsafe_ast_ref(s), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        if e : ast ref = this.else_block {
+            if visit(e, visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
+    }
 }
 
 type importstmt extends statement {
-    path : string 
+    path : string
 
 
     proc init(this) {
@@ -126,6 +235,10 @@ type importstmt extends statement {
         r := { importstmt: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
     }
 }
 
@@ -144,6 +257,10 @@ type includestmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
+    }
 }
 
 type printstmt extends statement {
@@ -159,6 +276,13 @@ type printstmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        return visit(unsafe_ast_ref(this.args), visitor, arg)
+    }
 }
 
 type returnstmt extends statement {
@@ -173,6 +297,19 @@ type returnstmt extends statement {
         r := { returnstmt: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if e : ast ref = this.expr {
+            if visit(e, visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
     }
 }
 
@@ -191,6 +328,19 @@ type usingstmt extends statement {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if i : ast ref = this.imprt {
+            if visit(i, visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
+    }
 }
 
 type whilestmt extends statement {
@@ -208,5 +358,21 @@ type whilestmt extends statement {
         r.init()
         return r
     }
-}
 
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
+            return visit_action.BREAK
+        }
+
+        foreach ref s in this.stmts {
+            if visit(unsafe_ast_ref(s), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
+    }
+}

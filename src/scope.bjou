@@ -33,7 +33,7 @@ type scope {
     parent_scope : (scope ref | none)
     is_module    : bool
     module_name  : string
-    sub_scopes   : scope[...]
+    sub_scopes   : scope*[...]
     symbols      : symbol_table
     overloads    : overload_table
 
@@ -41,7 +41,7 @@ type scope {
     proc create_common(parent_scope : scope ref) : scope {
         return { scope:
             .parent_scope = parent_scope,
-            .sub_scopes   = [...scope],
+            .sub_scopes   = [...scope*],
             .symbols      = symbol_table.create(),
             .overloads    = overload_table.create(),
         }
@@ -61,6 +61,26 @@ type scope {
         r.module_name = str()
 
         return r
+    }
+
+    proc is_in_module(this) : bool {
+        m_s : (scope ref | none) = this
+
+        while s : scope ref = m_s {
+            if s.is_module {
+                return true
+            }
+
+            m_s = s.parent_scope
+        }
+
+        return false
+    }
+
+    proc add_subscope(this, sub_scope : scope) : scope ref {
+        scope_ref := alloc_sub_scope(sub_scope)
+        this.sub_scopes.push(&scope_ref)
+        return scope_ref
     }
 
     # @libc
@@ -86,8 +106,8 @@ type scope {
             printf("\n")
         }
 
-        foreach ref sub in this.sub_scopes {
-            sub.show(indent_level)
+        foreach sub_ptr in this.sub_scopes {
+            (@sub_ptr).show(indent_level)
         }
         indent_level -= 1
         printf("%*s}\n", 4 * indent_level, "")
@@ -102,7 +122,7 @@ type globalscope extends scope {
 
     proc create() : globalscope {
         return { globalscope:
-            .sub_scopes         = [...scope],
+            .sub_scopes         = [...scope*],
             .symbols            = symbol_table.create(),
             .overloads          = overload_table.create(),
             .is_module          = false,
@@ -115,7 +135,7 @@ type globalscope extends scope {
         module_scope := this.sub_scopes[idx]
         debug_assert(module_scope.is_module, "not a module scope")
 
-        return module_scope
+        return @module_scope
     }
 
     proc get_or_add_module_scope_idx(this, module_name : string ref) : i32 {
@@ -123,10 +143,10 @@ type globalscope extends scope {
             return search.second
         }
 
-        new_module_scope := scope.create(this, module_name)
-        idx              := |this.sub_scopes|
-        this.sub_scopes.push(new_module_scope)
-        this.module_scopes.insert(new_module_scope.module_name, idx)
+        idx := len(this.sub_scopes)
+        scope_ref := this.add_subscope(scope.create(this, module_name))
+        scope_ref.is_module = true
+        this.module_scopes.insert(module_name, idx)
 
         return idx
     }
@@ -140,7 +160,18 @@ type globalscope extends scope {
 proc find_in_scope(s : scope ref, name : string ref) : (ast ref | overload_set ref | none) {
     m_scope : (scope ref | none) = s
 
+    s_is_in_module := s.is_in_module()
+
     while search_scope : scope ref = m_scope {
+        # Don't look at the global scope if in a module.
+        # This allows symbols to be shadowed within modules
+        # (which is good because modules won't know the global
+        # symbols of the codebase their imported to), but still
+        # prevents symbol shadowing at global scope.
+        if s_is_in_module and search_scope.parent_scope.is_none() {
+            break
+        }
+
         m_search := search_scope.symbols.lookup(name)
         if search : pair$(string ref, astref ref) = m_search {
             if node : ast ref = search.second {
@@ -156,6 +187,10 @@ proc find_in_scope(s : scope ref, name : string ref) : (ast ref | overload_set r
     }
 
     return nothing
+}
+
+proc resolve_identifier(s : scope ref, i : qidentifier ref) {
+
 }
 
 proc add_nodes_to_top_level_scope(global_scope : globalscope ref, nodes : bucket_array$astref ref, type_nodes : bucket_array$astref ref) {
@@ -269,6 +304,7 @@ proc build_subscope_block(parent_scope : scope ref, block : astref[...]) {
         if decl : declaration = node {
             add_to_scope(parent_scope, node)
         }
+
         if unsafe_baseref(node).get_flag(ast_flag.OPENS_SCOPE) {
             recursively_build_subscopes(parent_scope, node)
         }
@@ -276,7 +312,7 @@ proc build_subscope_block(parent_scope : scope ref, block : astref[...]) {
 }
 
 proc build_subscope(parent_scope : scope ref, p : procdef ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
 
     foreach m_param in p.param_decls {
         node := unsafe_ast_ref(m_param)
@@ -290,7 +326,7 @@ proc build_subscope(parent_scope : scope ref, p : procdef ref) {
 }
 
 proc build_subscope(parent_scope : scope ref, i : ifstmt ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
     if i.get_flag(ast_flag.IS_DESTRUCTURE) {
         add_to_scope(new_scope, unsafe_ast_ref(i.cond))
     }
@@ -298,12 +334,12 @@ proc build_subscope(parent_scope : scope ref, i : ifstmt ref) {
 }
 
 proc build_subscope(parent_scope : scope ref, e : elsestmt ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
     build_subscope_block(new_scope, e.stmts)
 }
 
 proc build_subscope(parent_scope : scope ref, f : forstmt ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
     if ini : ast ref = f.ini {
         add_to_scope(new_scope, ini)
     }
@@ -311,7 +347,7 @@ proc build_subscope(parent_scope : scope ref, f : forstmt ref) {
 }
 
 proc build_subscope(parent_scope : scope ref, f : foreachstmt ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
     if var : ast ref = f.var {
         add_to_scope(new_scope, var)
     }
@@ -319,7 +355,7 @@ proc build_subscope(parent_scope : scope ref, f : foreachstmt ref) {
 }
 
 proc build_subscope(parent_scope : scope ref, w : whilestmt ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
     if w.get_flag(ast_flag.IS_DESTRUCTURE) {
         add_to_scope(new_scope, unsafe_ast_ref(w.cond))
     }
@@ -327,7 +363,7 @@ proc build_subscope(parent_scope : scope ref, w : whilestmt ref) {
 }
 
 proc build_subscope(parent_scope : scope ref, d : dowhilestmt ref) {
-    new_scope := parent_scope.sub_scopes.push(scope.create(parent_scope))
+    new_scope := parent_scope.add_subscope(scope.create(parent_scope))
     build_subscope_block(new_scope, d.stmts)
 }
 

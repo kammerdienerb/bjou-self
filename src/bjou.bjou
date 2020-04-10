@@ -1,8 +1,5 @@
 # bjou.bjou
 
-# const A := 1
-# const A := 1
-
 main()
 
 import "__preload.bjou"

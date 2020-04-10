@@ -29,7 +29,16 @@ type async_module_scope_info {
 }
 
 
+enum phases {
+    NONE,
+    PARSING,
+    SYMBOLS_GLOBAL,
+    SYMBOLS_REST,
+    TYPES
+}
+
 type frontend {
+    phase              : phases
     n_files            : u64
     n_lines            : u64
     n_blank_lines      : u64
@@ -40,6 +49,7 @@ type frontend {
     include_containers : bucket_array$include_container
     files_seen         : hash_set$(string, str_hasher)
     global_scope       : globalscope
+    all_subscopes      : bucket_array$scope
     type_nodes         : bucket_array$astref
     # @bug 9 @bug 13
     # Shouldn't have to qualify the ty module here.
@@ -49,21 +59,25 @@ type frontend {
     include_container_lock : mutex
     files_seen_lock        : mutex
     global_scope_lock      : mutex
+    alloc_subscope_lock    : mutex
 
 
     proc create() : frontend {
         return { frontend:
+            .phase                  = phases.NONE,
             .all_nodes              = bucket_array$ast.create(),
             .include_containers     = bucket_array$include_container.create(),
             .top_level_nodes        = bucket_array$astref.create(),
             .files_seen             = hash_set$(string, str_hasher).create(),
             .global_scope           = globalscope.create(),
+            .all_subscopes          = bucket_array$scope.create(),
             .type_nodes             = bucket_array$astref.create(),
             .type_table             = hash_table$(string, ty, str_hasher).create(),
             .node_lock              = mutex.create(),
             .include_container_lock = mutex.create(),
             .files_seen_lock        = mutex.create(),
             .global_scope_lock      = mutex.create(),
+            .alloc_subscope_lock    = mutex.create(),
         }
     }
 
@@ -72,7 +86,9 @@ type frontend {
 
         if not compil.args.no_parallel {
             n_threads := compil.args.threads
-            if n_threads == -1
+            if n_threads == 0
+                n_threads = 1
+            else if n_threads <= -1
                 n_threads = thread::hw_threads() - 1
 
             this.pool = threadpool.create(n_threads)
@@ -101,6 +117,8 @@ type frontend {
     }
 
     proc do_parsing(this) {
+        this.phase = phases.PARSING
+
         parse_beg := measure_time_now_ms()
         if pool : threadpool ref = this.pool {
             this.parse_parallel(pool)
@@ -156,11 +174,15 @@ type frontend {
     }
 
     proc do_symbols(this) {
+        this.phase = phases.SYMBOLS_GLOBAL
+
         symbols_beg := measure_time_now_ms()
 
         this.symbols_top_level()
 
         procs := [...astref]
+
+        this.phase = phases.SYMBOLS_REST
 
         filter_scopes_from_bucket_array(this.top_level_nodes, procs)
 
@@ -190,6 +212,28 @@ type frontend {
             ms := symbols_end - symbols_beg
             report_phase_time("Populated symbol tables", ms, Attr.YELLOW)
         }
+
+        for it := this.top_level_nodes.iter(); not it.is_end(); it.next() {
+            m_node := it.val()
+            if node : ast ref = m_node {
+                if visit(node, visitors.hello, NULL) == visit_action.BREAK {
+                    break
+                }
+            }
+        }
+
+        for it := this.all_nodes.iter(); not it.is_end(); it.next() {
+            if not unsafe_baseref(it.val()).visited {
+                ui::warning_builder.create()
+                    .with_message("not visited")
+                    .add_location(unsafe_baseref(it.val()).cxt)
+                    .report()
+                    .free()
+            }
+        }
+
+        print "all:       %", this.all_nodes.len()
+        print "top_level: %", this.top_level_nodes.len()
     }
 
     proc symbols_top_level(this) {
@@ -218,9 +262,11 @@ type frontend {
     proc symbols_module_thread(arg : void*) {
         info := arg as async_module_scope_info*
 
+        debug_assert(info.idx != -1, "global scope slipped into module thread")
+
         foreach m_node in info.nodes {
             # @unsafe
-            # Nodes are only added to procs if they aren't 'nothing'.
+            # Nodes are only added to info.nodes if they aren't 'nothing'.
             node := unsafe_ast_ref(m_node)
             (info.fe).symbols_one(info.idx, node)
         }
@@ -239,7 +285,7 @@ type frontend {
             procs_by_module_idx[module_idx + 1].push(m_node)
         }
 
-        for module_idx : i32 = 0; module_idx <= max_module_idx; module_idx += 1 {
+        for module_idx : i32 = 1; module_idx <= max_module_idx; module_idx += 1 {
             info := new async_module_scope_info
             @info = { async_module_scope_info:
                 .idx   = module_idx - 1,
@@ -253,6 +299,8 @@ type frontend {
     }
 
     proc do_type_table(this) {
+        this.phase = phases.TYPES
+
         types_beg := measure_time_now_ms()
 
         # @performance
@@ -386,6 +434,37 @@ type frontend {
 
         return nothing
     }
+}
+
+
+
+# @todo @performance
+# This should probably be done on a per-thread basis so that we
+# can avoid the locking entirely.
+# There are going to be many scopes in a large program, and so
+# even locking for a short time will have some overhead that we may
+# want to avoid.
+# The better solution is to give each thread its own bucket array of
+# scopes that it can allocate from.
+# Then at the end, we just merge them like we do for AST bucket arrays
+# in the parser.
+# For now, I'm going to leave it because it seems _pretty_ fast and I
+# want to get other things done.
+#
+#                                                   Brandon Kammerdiener
+#                                                   March 12, 2020
+proc alloc_sub_scope(sub : scope) : scope ref {
+    fe := getref(compil.front)
+
+    if pool : threadpool ref = fe.pool {
+        fe.alloc_subscope_lock.lock()
+            scope_ref := fe.all_subscopes.push(sub)
+        fe.alloc_subscope_lock.unlock()
+
+        return scope_ref
+    }
+
+    return fe.all_subscopes.push(sub)
 }
 
 

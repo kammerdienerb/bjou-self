@@ -174,7 +174,7 @@ abstract type error_builder_base {
         this.pieces.push((s, cxt))
     }
 
-    proc report_piece(this, piece : error_piece ref, source_highlight_attr : Attr) {
+    proc report_piece(this, piece : error_piece ref, source_highlight_attr : Attr, normal_code_attr : Attr) {
         if note : error_note = piece {
             note'  := note.copy()
             strattr(note', get_attr(Attr.GREEN))
@@ -192,7 +192,7 @@ abstract type error_builder_base {
                 file.stderr().write("\n", 1)
                 msg'.free()
             }
-            highlight_source_location(loc.1, source_highlight_attr)
+            highlight_source_location(loc.1, source_highlight_attr, normal_code_attr)
         }
     }
 }
@@ -245,12 +245,12 @@ type error_builder extends error_builder_base {
         foreach ref piece in this.pieces {
             if idx > 0    { file.stderr().write("\n", 1) }
 
-            this.report_piece(piece, source_highlight_attr: Attr.RED)
+            this.report_piece(piece, source_highlight_attr: Attr.RED, normal_code_attr: Attr.CYAN)
             idx += 1
         }
         if |this.pieces| > 0    { file.stderr().write("\n", 1) }
 
-        if this.fatal    { __sys::exit(1) }
+        if this.fatal    { __sys::exit_group(1) }
 
         output_lock.unlock()
         return this
@@ -296,7 +296,7 @@ type warning_builder extends error_builder_base {
         foreach ref piece in this.pieces {
             if idx > 0    { file.stderr().write("\n", 1) }
 
-            this.report_piece(piece, source_highlight_attr: Attr.MAGENTA)
+            this.report_piece(piece, source_highlight_attr: Attr.MAGENTA, normal_code_attr: Attr.CYAN)
             idx += 1
         }
         if |this.pieces| > 0    { file.stderr().write("\n", 1) }
@@ -411,7 +411,7 @@ proc write_context_header(cxt : context ref) {
     ln_str.free()
 }
 
-proc highlight_source_location(cxt : context ref, attr : Attr) {
+proc highlight_source_location(cxt : context ref, attr : Attr, normal_code_attr : Attr) {
     write_context_header(cxt)
 
     f          := { file: }
@@ -454,18 +454,43 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
 
     n_lines_printed := 0
 
+    a    := get_attr(attr)
+    n    := get_attr(normal_code_attr)
+    c    := get_attr(Attr.CYAN)
+    b    := get_attr(Attr.BOLD)
+    u    := get_attr(Attr.UNDERLINE)
+    r    := get_attr(Attr.RESET)
+
     # print the 'before' context
     if cxt.beg.ln < 3 {
         for ; n_lines_printed < cxt.beg.ln - 1 and n_lines_printed < |lines|; n_lines_printed += 1 {
             write_lineno_buf(n_lines_printed + 1, false)
-            file.stderr().write(lines[n_lines_printed])
+            if compil.args.no_color {
+                file.stderr().write(lines[n_lines_printed])
+            } else {
+                file.stderr().write(n, cstrlen(n))
+                file.stderr().write(lines[n_lines_printed])
+                file.stderr().write(r, cstrlen(r))
+            }
         }
     } else {
         write_lineno_buf(cxt.beg.ln - 2, false)
-        file.stderr().write(lines[n_lines_printed])
+        if compil.args.no_color {
+            file.stderr().write(lines[n_lines_printed])
+        } else {
+            file.stderr().write(n, cstrlen(n))
+            file.stderr().write(lines[n_lines_printed])
+            file.stderr().write(r, cstrlen(r))
+        }
         n_lines_printed += 1
         write_lineno_buf(cxt.beg.ln - 1, false)
-        file.stderr().write(lines[n_lines_printed])
+        if compil.args.no_color {
+            file.stderr().write(lines[n_lines_printed])
+        } else {
+            file.stderr().write(n, cstrlen(n))
+            file.stderr().write(lines[n_lines_printed])
+            file.stderr().write(r, cstrlen(r))
+        }
         n_lines_printed += 1
     }
 
@@ -518,11 +543,6 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
             }
         }
     } else {
-        a    := get_attr(attr)
-        b    := get_attr(Attr.BOLD)
-        u    := get_attr(Attr.UNDERLINE)
-        r    := get_attr(Attr.RESET)
-
         if cxt.beg.ln == cxt.end.ln {
             line := lines[n_lines_printed]
             n_lines_printed += 1
@@ -534,13 +554,17 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
             file.stderr().write(b, cstrlen(b))
             write_lineno_buf(cxt.beg.ln, true)
             file.stderr().write(r, cstrlen(r))
+            file.stderr().write(n, cstrlen(n))
             file.stderr().write(pre)
+            file.stderr().write(r, cstrlen(r))
             file.stderr().write(a, cstrlen(a))
             file.stderr().write(b, cstrlen(b))
             file.stderr().write(u, cstrlen(u))
             file.stderr().write(high)
             file.stderr().write(r, cstrlen(r))
+            file.stderr().write(n, cstrlen(n))
             file.stderr().write(post)
+            file.stderr().write(r, cstrlen(r))
 
             post.free()
             high.free()
@@ -557,6 +581,7 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
                     pre  := line.substr(0, cxt.beg.ch - 1)
                     high := line.substr(cxt.beg.ch - 1)
 
+                    strattr(pre, n)
                     strattr(high, a, b, u)
                     file.stderr().write(pre)
                     file.stderr().write(high)
@@ -568,6 +593,7 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
                     post := line.substr(cxt.end.ch)
 
                     strattr(high, a, b, u)
+                    strattr(post, n)
                     file.stderr().write(high)
                     file.stderr().write(post)
 
@@ -589,15 +615,33 @@ proc highlight_source_location(cxt : context ref, attr : Attr) {
     if |lines| - first_line_after < 3 {
         for i := 0; i < |lines| - first_line_after; i += 1 {
             write_lineno_buf(cxt.end.ln + i + 1, false)
-            file.stderr().write(lines[n_lines_printed])
+            if compil.args.no_color {
+                file.stderr().write(lines[n_lines_printed])
+            } else {
+                file.stderr().write(n, cstrlen(n))
+                file.stderr().write(lines[n_lines_printed])
+                file.stderr().write(r, cstrlen(r))
+            }
             n_lines_printed += 1
         }
     } else {
         write_lineno_buf(cxt.end.ln + 1, false)
-        file.stderr().write(lines[n_lines_printed])
+        if compil.args.no_color {
+            file.stderr().write(lines[n_lines_printed])
+        } else {
+            file.stderr().write(n, cstrlen(n))
+            file.stderr().write(lines[n_lines_printed])
+            file.stderr().write(r, cstrlen(r))
+        }
         n_lines_printed += 1
         write_lineno_buf(cxt.end.ln + 2, false)
-        file.stderr().write(lines[n_lines_printed])
+        if compil.args.no_color {
+            file.stderr().write(lines[n_lines_printed])
+        } else {
+            file.stderr().write(n, cstrlen(n))
+            file.stderr().write(lines[n_lines_printed])
+            file.stderr().write(r, cstrlen(r))
+        }
         n_lines_printed += 1
     }
 
@@ -619,7 +663,7 @@ proc error(message : string ref, fatal : bool) {
 
     write_error(message)
 
-    if fatal    { __sys::exit(1) }
+    if fatal    { __sys::exit_group(1) }
 
     output_lock.unlock()
 }

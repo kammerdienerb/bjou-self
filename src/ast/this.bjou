@@ -10,6 +10,10 @@ type thisparam extends astbase {
         r.init()
         return r
     }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
+    }
 }
 
 type thistype extends astbase {
@@ -21,5 +25,9 @@ type thistype extends astbase {
         r := { thistype: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
     }
 }

@@ -11,9 +11,22 @@ type arglist extends astbase {
 
     proc create() : arglist {
         r := { arglist: }
-        
+
         r.init()
 
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        if visitor(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        foreach ref e in this.exprs {
+            if visit(unsafe_ast_ref(e), visitor, arg) == visit_action.BREAK {
+                return visit_action.BREAK
+            }
+        }
+
+        return visit_action.CONTINUE
     }
 }

@@ -1,7 +1,7 @@
 # moduledecl.bjou
 
 type moduledecl extends astbase {
-    ident : string 
+    ident : string
 
 
     proc init(this) {
@@ -13,5 +13,9 @@ type moduledecl extends astbase {
         r := { moduledecl: }
         r.init()
         return r
+    }
+
+    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+        return visitor(node, arg)
     }
 }

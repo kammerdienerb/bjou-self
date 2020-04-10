@@ -11,8 +11,7 @@ using import "utils.bjou"
 using import "ty.bjou"
 
 proc __inline__ add(array : bucket_array$ast ref, node : ast ref) : astref {
-    debug_assert(not node.is_none(),
-        "trying to allocate a \"nothing\" node in the bucket_array")
+    debug_assert(not node.is_none(), "trying to allocate nothing")
     return array.push(node)
 }
 
@@ -30,11 +29,13 @@ abstract type astbase {
     flags      : u32
     cxt        : context
     module_idx : i32
+    visited    : bool
 
 
     proc init(this) {
         this.flags      = 0
         this.module_idx = -1
+        this.visited    = false
     }
 
     proc __inline__ set_flag(this, flag : ast_flag) {
@@ -187,6 +188,8 @@ proc unsafe_baseref(this : astref) : astbase ref {
 }
 
 proc unsafe_ast_ref(this : astref) : ast ref {
+    debug_assert(not this.is_none(), "unsafe_ast_ref(astref) failed")
+
     # @bad
     # Assuming equivalence of ref and pointer here.
     return @@(\__sum_data{ this } as ast**)
@@ -197,4 +200,110 @@ proc new_void_declarator(array : bucket_array$ast ref) : declarator {
     d.identifier = add(array, qidentifier.create("void"))
 
     return d
+}
+
+enum visit_action {
+    CONTINUE,
+    BREAK
+}
+
+proc visit(node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    debug_assert(not node.is_none(), "can't visit a nothing node")
+
+    if      x : declarator             = node { return x.visit(node, visitor, arg) }
+    else if x : arraydeclarator        = node { return x.visit(node, visitor, arg) }
+    else if x : slicedeclarator        = node { return x.visit(node, visitor, arg) }
+    else if x : dynamicarraydeclarator = node { return x.visit(node, visitor, arg) }
+    else if x : pointerdeclarator      = node { return x.visit(node, visitor, arg) }
+    else if x : refdeclarator          = node { return x.visit(node, visitor, arg) }
+    else if x : sumdeclarator          = node { return x.visit(node, visitor, arg) }
+    else if x : tupledeclarator        = node { return x.visit(node, visitor, arg) }
+    else if x : procdeclarator         = node { return x.visit(node, visitor, arg) }
+    else if x : vardecl                = node { return x.visit(node, visitor, arg) }
+    else if x : constantdecl           = node { return x.visit(node, visitor, arg) }
+    else if x : procdef                = node { return x.visit(node, visitor, arg) }
+    else if x : templateprocdef        = node { return x.visit(node, visitor, arg) }
+    else if x : typedef                = node { return x.visit(node, visitor, arg) }
+    else if x : templatetypedef        = node { return x.visit(node, visitor, arg) }
+    else if x : enumdef                = node { return x.visit(node, visitor, arg) }
+    else if x : integerliteral         = node { return x.visit(node, visitor, arg) }
+    else if x : floatliteral           = node { return x.visit(node, visitor, arg) }
+    else if x : stringliteral          = node { return x.visit(node, visitor, arg) }
+    else if x : charliteral            = node { return x.visit(node, visitor, arg) }
+    else if x : boolliteral            = node { return x.visit(node, visitor, arg) }
+    else if x : nothingliteral         = node { return x.visit(node, visitor, arg) }
+    else if x : qidentifier            = node { return x.visit(node, visitor, arg) }
+    else if x : namedarg               = node { return x.visit(node, visitor, arg) }
+    else if x : tupleliteral           = node { return x.visit(node, visitor, arg) }
+    else if x : initializerlist        = node { return x.visit(node, visitor, arg) }
+    else if x : sliceliteral           = node { return x.visit(node, visitor, arg) }
+    else if x : dynamicarrayliteral    = node { return x.visit(node, visitor, arg) }
+    else if x : lenexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : newexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : deleteexpr             = node { return x.visit(node, visitor, arg) }
+    else if x : sizeofexpr             = node { return x.visit(node, visitor, arg) }
+    else if x : addrexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : derefexpr              = node { return x.visit(node, visitor, arg) }
+    else if x : notexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : bnegexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : asexpr                 = node { return x.visit(node, visitor, arg) }
+    else if x : callexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : subscriptexpr          = node { return x.visit(node, visitor, arg) }
+    else if x : dotexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : multexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : divexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : modexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : plusexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : minusexpr              = node { return x.visit(node, visitor, arg) }
+    else if x : bshlexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : bshrexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : lssexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : leqexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : gtrexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : geqexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : equexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : neqexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : bandexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : bxorexpr               = node { return x.visit(node, visitor, arg) }
+    else if x : borexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : andexpr                = node { return x.visit(node, visitor, arg) }
+    else if x : orexpr                 = node { return x.visit(node, visitor, arg) }
+    else if x : assignexpr             = node { return x.visit(node, visitor, arg) }
+    else if x : multassignexpr         = node { return x.visit(node, visitor, arg) }
+    else if x : divassignexpr          = node { return x.visit(node, visitor, arg) }
+    else if x : modassignexpr          = node { return x.visit(node, visitor, arg) }
+    else if x : plusassignexpr         = node { return x.visit(node, visitor, arg) }
+    else if x : minusassignexpr        = node { return x.visit(node, visitor, arg) }
+    else if x : printstmt              = node { return x.visit(node, visitor, arg) }
+    else if x : returnstmt             = node { return x.visit(node, visitor, arg) }
+    else if x : ifstmt                 = node { return x.visit(node, visitor, arg) }
+    else if x : elsestmt               = node { return x.visit(node, visitor, arg) }
+    else if x : forstmt                = node { return x.visit(node, visitor, arg) }
+    else if x : foreachstmt            = node { return x.visit(node, visitor, arg) }
+    else if x : whilestmt              = node { return x.visit(node, visitor, arg) }
+    else if x : dowhilestmt            = node { return x.visit(node, visitor, arg) }
+    else if x : breakstmt              = node { return x.visit(node, visitor, arg) }
+    else if x : continuestmt           = node { return x.visit(node, visitor, arg) }
+    else if x : importstmt             = node { return x.visit(node, visitor, arg) }
+    else if x : usingstmt              = node { return x.visit(node, visitor, arg) }
+    else if x : includestmt            = node { return x.visit(node, visitor, arg) }
+    else if x : thisparam              = node { return x.visit(node, visitor, arg) }
+    else if x : thistype               = node { return x.visit(node, visitor, arg) }
+    else if x : templatedef            = node { return x.visit(node, visitor, arg) }
+    else if x : templateinst           = node { return x.visit(node, visitor, arg) }
+    else if x : arglist                = node { return x.visit(node, visitor, arg) }
+    else if x : directive              = node { return x.visit(node, visitor, arg) }
+    else if x : moduledecl             = node { return x.visit(node, visitor, arg) }
+
+    debug_assert(false, "node kind not handled in visit procedure")
+
+    return visit_action.BREAK
+}
+
+type visitors {
+    proc hello(node : ast ref, arg : void*) : visit_action {
+        unsafe_baseref(node).visited = true
+#         print "!!!"
+        return visit_action.CONTINUE
+    }
 }
