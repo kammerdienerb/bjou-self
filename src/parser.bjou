@@ -2188,8 +2188,28 @@ type parser {
         seen_first_nl := false
 
         while |this.buff| != 0 {
-            c := this.buff[0]
-            if is_space(c) {
+            # @bad @hack @performance
+            # Technically, the slice given to us by io::file.read() is not
+            # guaranteed to be u32 aligned, so this could segfault.
+            # Further, the use of \__slice_data is ugly.
+            # But, I saw this cute optimization in the dlang compiler, so I
+            # wanted to try it out here.
+            # Super basic testing didn't really show a difference (I suspect
+            # our bottlenecks lie elsewhere..), but hey, didn't hurt.
+            # What we _should_ do in the future is create the file buff slices
+            # from mmap()'d regions and ensure the alignment ourselves.
+            # The io::file.read() function isn't super performant or anything.
+            #
+            #                                             Brandon Kammerdiener
+            #                                                    July 14, 2020
+
+            c_addr := \__slice_data{ this.buff } as u32*
+            c      := @(c_addr as char*)
+
+            if @(c_addr) == 0x20202020 {
+                this.cur_cxt.end.ch += 4
+                this.buff.advance(4)
+            } else if is_space(c) {
                 if c == '\n' {
                     this.n_lines        += 1
                     this.cur_cxt.end.ln += 1
