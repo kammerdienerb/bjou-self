@@ -1,0 +1,82 @@
+# digraph.bjou
+
+module digraph
+
+type vertex_type$T {
+    val: T
+    adj: u32[...]
+    vis: bool
+
+
+    proc create(val : T) : vertex_type$T {
+        return { vertex_type$T:
+            .val = val,
+            .adj = [...u32],
+            .vis = false
+        }
+    }
+}
+
+type digraph$T {
+    vertices: vertex_type$T[...]
+
+
+    proc create() : digraph$T {
+        return { digraph$T:
+            .vertices = [...vertex_type$T]
+        }
+    }
+
+    proc vertex(this, v: u32) : (vertex_type$T ref | none) {
+        if v >= len(this.vertices) { return nothing }
+        return this.vertices[v]
+    }
+
+    proc add_vertex(this, val: T) : u32 {
+        this.vertices.push(vertex_type.create(val))
+        return len(this.vertices) - 1
+    }
+
+    proc add_edge(this, from: u32, to: u32) {
+        m_v := this.vertex(from)
+        if v : vertex_type$T ref = m_v {
+            v.adj.push(to)
+        }
+    }
+
+    proc check_vertex_for_cycles(this, stack : u32[...] ref, idx : u32) : bool {
+        has_cycle := false
+
+        stack.push(idx)
+
+        v := getref(this.vertices[idx])
+
+        if v.vis { return true }
+        v.vis = true
+
+        foreach a in v.adj {
+            if this.check_vertex_for_cycles(stack, a) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    proc check_for_cycles(this) : (u32[...] | none) {
+        stack     := [...u32]
+        has_cycle := false
+
+        for i : u32 = 0; i < len(this.vertices); i += 1 {
+            if this.check_vertex_for_cycles(stack, i) {
+                has_cycle = true
+                break
+            }
+        }
+
+        foreach ref v in this.vertices { v.vis = false }
+
+        if has_cycle { return stack }
+        return nothing
+    }
+}

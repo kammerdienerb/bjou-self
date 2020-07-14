@@ -11,8 +11,11 @@ type thisparam extends astbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -27,7 +30,10 @@ type thistype extends astbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }

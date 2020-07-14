@@ -1,8 +1,9 @@
 # declaration.bjou
 
 abstract type declaration extends typed {
-    name_cxt  : context
-    name      : string
+    name_cxt : context
+    name     : string
+    scope    : (scope ref | none)
 
 
     proc init(this) {
@@ -25,8 +26,10 @@ type vardecl extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if d : ast ref = this.type_decl {
@@ -39,6 +42,8 @@ type vardecl extends declaration {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -59,8 +64,10 @@ type constantdecl extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if d : ast ref = this.type_decl {
@@ -73,6 +80,8 @@ type constantdecl extends declaration {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -96,8 +105,10 @@ type procdef extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref p in this.param_decls {
@@ -116,6 +127,8 @@ type procdef extends declaration {
             }
         }
 
+        visitor.post(node, arg)
+
         return visit_action.CONTINUE
     }
 }
@@ -127,6 +140,7 @@ type templateprocdef extends declaration {
 
     proc init(this) {
         declaration.init(this)
+        this.set_flag(ast_flag.IS_TEMPLATE)
     }
 
     proc create() : templateprocdef {
@@ -135,8 +149,10 @@ type templateprocdef extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.template_def), visitor, arg) == visit_action.BREAK {
@@ -145,6 +161,8 @@ type templateprocdef extends declaration {
         if visit(unsafe_ast_ref(this.template), visitor, arg) == visit_action.BREAK {
             return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -166,8 +184,10 @@ type typedef extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if e : ast ref = this.extends_or_alias {
@@ -182,6 +202,8 @@ type typedef extends declaration {
             }
         }
 
+        visitor.post(node, arg)
+
         return visit_action.CONTINUE
     }
 }
@@ -193,6 +215,7 @@ type templatetypedef extends declaration {
 
     proc init(this) {
         declaration.init(this)
+        this.set_flag(ast_flag.IS_TEMPLATE)
     }
 
     proc create() : templatetypedef {
@@ -201,8 +224,10 @@ type templatetypedef extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.template_def), visitor, arg) == visit_action.BREAK {
@@ -211,6 +236,8 @@ type templatetypedef extends declaration {
         if visit(unsafe_ast_ref(this.template), visitor, arg) == visit_action.BREAK {
             return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -231,10 +258,17 @@ type enumdef extends declaration {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
-        # visit each child
+
+        # @incomplete
+        # visit each child?
+
+        visitor.post(node, arg)
+
         return visit_action.CONTINUE
     }
 }

@@ -21,8 +21,11 @@ type boolliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -43,8 +46,11 @@ type charliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -62,11 +68,17 @@ type dynamicarrayliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.type_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.type_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -86,8 +98,11 @@ type floatliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -227,8 +242,11 @@ type integerliteral extends exprbase {
         }
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -273,8 +291,11 @@ type nothingliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -294,8 +315,10 @@ type sliceliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.src), visitor, arg) == visit_action.BREAK
@@ -305,7 +328,11 @@ type sliceliteral extends exprbase {
         if visit(unsafe_ast_ref(this.length), visitor, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit_action.CONTINUE
+        a := visit_action.CONTINUE
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -324,8 +351,11 @@ type stringliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -344,14 +374,18 @@ type tupleliteral extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref e in this.exprs {
             if visit(unsafe_ast_ref(e), visitor, arg) == visit_action.BREAK
                 return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -386,8 +420,10 @@ type qidentifier extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if t : ast ref = this.template_inst {
@@ -396,7 +432,8 @@ type qidentifier extends exprbase {
             }
         }
 
-        # visit each child
+        visitor.post(node, arg)
+
         return visit_action.CONTINUE
     }
 
@@ -425,13 +462,17 @@ type namedarg extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.expr), visitor, arg) == visit_action.BREAK {
             return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -455,8 +496,10 @@ type initializerlist extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if d : ast ref = this.type_decl {
@@ -469,6 +512,8 @@ type initializerlist extends exprbase {
             if visit(unsafe_ast_ref(e), visitor, arg) == visit_action.BREAK
                 return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -485,8 +530,10 @@ abstract type binexprbase extends exprbase {
     }
 }
 
-proc binexpr_visit(this : binexprbase ref, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-    if visitor(node, arg) == visit_action.BREAK
+proc binexpr_visit(this : binexprbase ref, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+    visitor.pre(node, arg)
+
+    if visitor.vis(node, arg) == visit_action.BREAK
         return visit_action.BREAK
 
     if l : ast ref = this.left {
@@ -500,6 +547,8 @@ proc binexpr_visit(this : binexprbase ref, node : ast ref, visitor : <(ast ref, 
             return visit_action.BREAK
         }
     }
+
+    visitor.post(node, arg)
 
     return visit_action.CONTINUE
 }
@@ -518,11 +567,17 @@ type addrexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.right), visitor, arg)
+        a := visit(unsafe_ast_ref(this.right), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -537,7 +592,7 @@ type andexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -557,8 +612,10 @@ type asexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.expr), visitor, arg) == visit_action.BREAK {
@@ -568,6 +625,8 @@ type asexpr extends exprbase {
         if visit(unsafe_ast_ref(this.type_decl), visitor, arg) == visit_action.BREAK {
             return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -584,7 +643,7 @@ type assignexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -600,7 +659,7 @@ type bandexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -619,11 +678,17 @@ type bnegexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.right), visitor, arg)
+        a := visit(unsafe_ast_ref(this.right), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -638,7 +703,7 @@ type borexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -654,7 +719,7 @@ type bshlexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -670,7 +735,7 @@ type bshrexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -686,7 +751,7 @@ type bxorexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -702,7 +767,7 @@ type callexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -721,11 +786,17 @@ type deleteexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.right), visitor, arg)
+        a := visit(unsafe_ast_ref(this.right), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -743,11 +814,17 @@ type derefexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.right), visitor, arg)
+        a := visit(unsafe_ast_ref(this.right), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -762,7 +839,7 @@ type divassignexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -778,7 +855,7 @@ type divexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -794,7 +871,7 @@ type dotexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -810,7 +887,7 @@ type equexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -826,7 +903,7 @@ type geqexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -842,7 +919,7 @@ type gtrexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -861,11 +938,17 @@ type lenexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.expr), visitor, arg)
+        a := visit(unsafe_ast_ref(this.expr), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -880,7 +963,7 @@ type leqexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -896,7 +979,7 @@ type lssexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -912,7 +995,7 @@ type minusassignexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -928,7 +1011,7 @@ type minusexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -944,7 +1027,7 @@ type modassignexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -960,7 +1043,7 @@ type modexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -976,7 +1059,7 @@ type multassignexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -992,7 +1075,7 @@ type multexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -1008,7 +1091,7 @@ type neqexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -1027,11 +1110,17 @@ type newexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.type_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.type_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -1049,11 +1138,17 @@ type notexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.right), visitor, arg)
+        a := visit(unsafe_ast_ref(this.right), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -1068,7 +1163,7 @@ type orexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -1084,7 +1179,7 @@ type plusassignexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -1100,7 +1195,7 @@ type plusexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }
@@ -1119,11 +1214,17 @@ type sizeofexpr extends exprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.type_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.type_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -1138,7 +1239,7 @@ type subscriptexpr extends binexprbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
         return binexpr_visit(this, node, visitor, arg)
     }
 }

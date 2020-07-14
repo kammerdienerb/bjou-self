@@ -20,6 +20,8 @@ using import "parser.bjou"
 using import "hash_functions.bjou"
 using import "scope.bjou"
 using import "ty.bjou"
+using import "ui.bjou"
+using import "digraph.bjou"
 
 
 type async_module_scope_info {
@@ -55,7 +57,7 @@ type frontend {
     # Shouldn't have to qualify the ty module here.
     type_table         : hash_table$(string, ty::ty, str_hasher)
 
-    node_lock              : mutex
+    merge_lock             : mutex
     include_container_lock : mutex
     files_seen_lock        : mutex
     global_scope_lock      : mutex
@@ -73,7 +75,7 @@ type frontend {
             .all_subscopes          = bucket_array$scope.create(),
             .type_nodes             = bucket_array$astref.create(),
             .type_table             = hash_table$(string, ty, str_hasher).create(),
-            .node_lock              = mutex.create(),
+            .merge_lock             = mutex.create(),
             .include_container_lock = mutex.create(),
             .files_seen_lock        = mutex.create(),
             .global_scope_lock      = mutex.create(),
@@ -99,8 +101,10 @@ type frontend {
         if compil.args.syntax_only {
             return
         }
-        this.do_symbols()
-        this.do_type_table()
+
+        d := digraph$astref.create()
+#         this.do_symbols()
+#         this.do_type_table()
 
         if pool : threadpool ref = this.pool {
             pool.stop(stopmode.GRACEFUL)
@@ -135,6 +139,13 @@ type frontend {
             report_phase_time(phase_str.c_str(), ms, Attr.YELLOW)
             phase_str.free()
         }
+
+        s := str("total number of nodes is ") + str(this.all_nodes.len())
+        info_builder.create().with_message(s.c_str()).report().free()
+        s.free()
+        s = str("number of top-level nodes is ") + str(this.top_level_nodes.len())
+        info_builder.create().with_message(s.c_str()).report().free()
+        s.free()
     }
 
     proc parse_serial(this) {
@@ -144,6 +155,7 @@ type frontend {
 
             if stored_path : string ref = this.first_encounter_of_file(new_path) {
                 p := parser.create(this, stored_path, f, kind: parserkind.IMPORT)
+                p.scope_stack.push(&this.global_scope)
                 p.go()
             } else {
                 input_repeat_error(path)
@@ -162,6 +174,7 @@ type frontend {
             if stored_path : string ref = this.first_encounter_of_file_locked(new_path) {
                 p := new async_parser
                 @p = async_parser.create(this, pool, stored_path, f, kind: parserkind.INPUT_FILE)
+                p.scope_stack.push(&this.global_scope)
                 pool.add_task(async_parser_wrapper, p)
             } else {
                 input_repeat_error(path)
@@ -207,33 +220,14 @@ type frontend {
             this.global_scope.show()
         }
 
+        this.resolve_identifiers()
+
         if compil.args.stats {
             using ui
             ms := symbols_end - symbols_beg
             report_phase_time("Populated symbol tables", ms, Attr.YELLOW)
         }
 
-        for it := this.top_level_nodes.iter(); not it.is_end(); it.next() {
-            m_node := it.val()
-            if node : ast ref = m_node {
-                if visit(node, visitors.hello, NULL) == visit_action.BREAK {
-                    break
-                }
-            }
-        }
-
-        for it := this.all_nodes.iter(); not it.is_end(); it.next() {
-            if not unsafe_baseref(it.val()).visited {
-                ui::warning_builder.create()
-                    .with_message("not visited")
-                    .add_location(unsafe_baseref(it.val()).cxt)
-                    .report()
-                    .free()
-            }
-        }
-
-        print "all:       %", this.all_nodes.len()
-        print "top_level: %", this.top_level_nodes.len()
     }
 
     proc symbols_top_level(this) {
@@ -262,8 +256,6 @@ type frontend {
     proc symbols_module_thread(arg : void*) {
         info := arg as async_module_scope_info*
 
-        debug_assert(info.idx != -1, "global scope slipped into module thread")
-
         foreach m_node in info.nodes {
             # @unsafe
             # Nodes are only added to info.nodes if they aren't 'nothing'.
@@ -285,7 +277,7 @@ type frontend {
             procs_by_module_idx[module_idx + 1].push(m_node)
         }
 
-        for module_idx : i32 = 1; module_idx <= max_module_idx; module_idx += 1 {
+        for module_idx : i32 = 0; module_idx <= max_module_idx; module_idx += 1 {
             info := new async_module_scope_info
             @info = { async_module_scope_info:
                 .idx   = module_idx - 1,
@@ -296,6 +288,33 @@ type frontend {
         }
 
         pool.wait()
+    }
+
+    proc resolve_identifiers(this) {
+#         for it := this.all_nodes.iter(); not it.is_end(); it.next() {
+#             if unsafe_baseref(it.val()).get_flag(ast_flag.OPENS_SCOPE) {
+#                 if p : procdef = it.val() {
+#                     if  (not p.get_flag(ast_flag.IS_TEMPLATE))
+#                     and (not p.get_flag(ast_flag.ANONYMOUS_PROC))
+#                     and    unsafe_baseref(it.val()).scope.is_none() {
+#                         warning_builder.create()
+#                             .with_message("doesn't have a scope")
+#                             .add_location(unsafe_baseref(it.val()).cxt)
+#                             .report()
+#                             .free()
+#                     }
+#                 }
+#             }
+#             if i : qidentifier = it.val() {
+#                 if i._decl.is_none() {
+#                     warning_builder.create()
+#                         .with_message("identifier did not get resolved")
+#                         .add_location(i.cxt)
+#                         .report()
+#                         .free()
+#                 }
+#             }
+#         }
     }
 
     proc do_type_table(this) {
@@ -409,7 +428,10 @@ type frontend {
     }
 
     proc _get_next_include_container(this) : include_container ref {
-        ic := { include_container: .nodes = bucket_array$astref.create() }
+        ic := { include_container:
+            .nodes = bucket_array$astref.create(),
+            .lock  = thread::mutex.create()
+        }
         return this.include_containers.push(ic)
     }
 
@@ -434,6 +456,17 @@ type frontend {
 
         return nothing
     }
+
+    proc visit_all(this, visitor : visitor_t, arg : void*) {
+        for it := this.top_level_nodes.iter(); not it.is_end(); it.next() {
+            m_node := it.val()
+            if node : ast ref = m_node {
+                if visit(node, visitor, arg) == visit_action.BREAK {
+                    break
+                }
+            }
+        }
+    }
 }
 
 
@@ -453,6 +486,7 @@ type frontend {
 #
 #                                                   Brandon Kammerdiener
 #                                                   March 12, 2020
+
 proc alloc_sub_scope(sub : scope) : scope ref {
     fe := getref(compil.front)
 
@@ -473,6 +507,12 @@ proc filter_scopes_from_bucket_array(nodes : bucket_array$astref ref, procs : as
         if node : ast ref = it.val() {
             if unsafe_baseref(node).get_flag(ast_flag.OPENS_SCOPE) {
                 procs.push(node)
+            } else if t : typedef = node {
+                foreach d in t.declarations {
+                    if p : procdef = unsafe_ast_ref(d) {
+                        procs.push(d)
+                    }
+                }
             } else if i : includestmt = node    {
                 if ic : include_container ref = i.container {
                     filter_scopes_from_bucket_array(ic.nodes, procs)
@@ -521,7 +561,7 @@ proc open_file_error(path : string ref, from_cxt : (context ref | none)) {
     err_str.append(path)
     err_str.append("'.")
 
-    eb := ui::error_builder.create()
+    eb := error_builder.create()
         .with_message(err_str.c_str())
 
     if cxt : context ref = from_cxt {
@@ -536,7 +576,7 @@ proc input_repeat_error(path : string ref) {
     err_str.append(path)
     err_str.append("' is repeated in the input file list.")
 
-    ui::error(err_str.c_str())
+    error(err_str.c_str())
 }
 
 proc multiple_include_error(path : string ref, intro_cxt : context ref) {
@@ -544,7 +584,7 @@ proc multiple_include_error(path : string ref, intro_cxt : context ref) {
     err_str.append(path)
     err_str.append("' has already been encountered and may not be included again.")
 
-    ui::error_builder.create()
+    error_builder.create()
         .with_message(err_str.c_str())
         .add_location(intro_cxt)
         .report()

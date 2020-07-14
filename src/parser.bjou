@@ -10,8 +10,6 @@ using import "io.bjou"
 using import "measure_time.bjou"
 using import "bucket_array.bjou"
 
-# include "bucket_array.bjou"
-
 using import "token_parsers.bjou"
 using import "ui.bjou"
 using import "utils.bjou"
@@ -21,6 +19,7 @@ using import "context.bjou"
 using import "debug.bjou"
 using import "operator.bjou"
 using import "globals.bjou"
+using import "scope.bjou"
 
 enum parserkind {
     INPUT_FILE,
@@ -46,6 +45,8 @@ type parser {
     inc_container       : (include_container ref | none)
     introduction_cxt    : context
     module_idx          : i32
+    all_subscopes       : bucket_array$scope
+    scope_stack         : scope*[...]
 
 
     proc init(this, f : file, kind : parserkind) {
@@ -54,6 +55,8 @@ type parser {
         this.top_level_nodes     = bucket_array$astref.create()
         this.f                   = f
         this.module_idx          = -1
+        this.all_subscopes       = bucket_array$scope.create()
+        this.scope_stack         = [...scope*]
     }
 
     proc create(fe : frontend ref, path : string ref, f : file, kind : parserkind) : parser {
@@ -72,6 +75,8 @@ type parser {
         # this.all_nodes.free()
         # this.top_level_nodes.free()
 
+        this.scope_stack.free()
+
         # async_parsers clean up themselves.
         if not this.pool.is_none()    { delete &this }
     }
@@ -79,8 +84,9 @@ type parser {
     proc go(this) {
         beg := measure_time_now_ms()
 
-        this.cur_cxt.file = this.path
-        this.cur_cxt.beg  = this.cur_cxt.end = { location: .ln = 1, .ch = 1 }
+        this.cur_cxt.file          = this.path
+        this.cur_cxt.beg           = this.cur_cxt.end = { location: .ln = 1, .ch = 1 }
+        this.just_cleaned_cxt.file = this.path
 
         this.buff     = this.f.read()
         this.buff_ptr = this.buff.data()
@@ -106,14 +112,14 @@ type parser {
         end := measure_time_now_ms()
 
         if compil.args.syntax_only {
-            if not this.pool.is_none() { this.fe.node_lock.lock() }
+            if not this.pool.is_none() { this.fe.merge_lock.lock() }
 
             this.fe.n_files       += 1
             this.fe.n_lines       += this.n_lines
             this.fe.n_blank_lines += this.n_blank_lines
             this.fe.n_bytes       += this.n_bytes
 
-            if not this.pool.is_none() { this.fe.node_lock.unlock() }
+            if not this.pool.is_none() { this.fe.merge_lock.unlock() }
         } else {
             this.transfer_to_fe()
         }
@@ -148,7 +154,7 @@ type parser {
     }
 
     proc transfer_to_fe(this) {
-        if not this.pool.is_none() { this.fe.node_lock.lock() }
+        if not this.pool.is_none() { this.fe.merge_lock.lock() }
 
         this.fe.n_files       += 1
         this.fe.n_lines       += this.n_lines
@@ -156,6 +162,7 @@ type parser {
         this.fe.n_bytes       += this.n_bytes
 
         this.fe.all_nodes      = bucket_array::merge_and_steal_data(this.fe.all_nodes, this.all_nodes)
+        this.fe.all_subscopes  = bucket_array::merge_and_steal_data(this.fe.all_subscopes, this.all_subscopes)
 
         if this.kind == parserkind.INCLUDE {
             if ic : include_container ref = this.inc_container {
@@ -167,7 +174,7 @@ type parser {
             this.fe.top_level_nodes = bucket_array::merge_and_steal_data(this.fe.top_level_nodes, this.top_level_nodes)
         }
 
-        if not this.pool.is_none() { this.fe.node_lock.unlock() }
+        if not this.pool.is_none() { this.fe.merge_lock.unlock() }
     }
 
     proc parse_top_level(this) : astref {
@@ -184,7 +191,11 @@ type parser {
         return node
     }
 
-    proc parse_var_decl(this) : astref {
+    proc __inline__ parse_var_decl(this) : astref {
+        return this.parse_var_decl(do_declare: true)
+    }
+
+    proc parse_var_decl(this, do_declare : bool) : astref {
         if not this.optional$identifier_then_colon(skip_eat: true) {
             return nothing
         }
@@ -218,7 +229,9 @@ type parser {
         }
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
-        return add(this.all_nodes, result)
+        v := add(this.all_nodes, result)
+        if do_declare { this.declare(v) }
+        return v
     }
 
     proc parse_this_param(this) : astref {
@@ -285,7 +298,9 @@ type parser {
         }
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
-        return add(this.all_nodes, result)
+        c := add(this.all_nodes, result)
+        this.declare(c)
+        return c
     }
 
     proc parse_stmt(this) : astref {
@@ -396,6 +411,7 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         this.eat(2) # 'if'
 
@@ -411,7 +427,11 @@ type parser {
         }
 
         this.parse_stmt_block(result.stmts, "'if' statement")
+        this.pop_scope()
+
         result.else_block = this.parse_else()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -424,10 +444,14 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         this.eat(4) # 'else'
 
         this.parse_stmt_block(result.stmts, "'else' block")
+        this.pop_scope()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -440,6 +464,7 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         this.eat(7) # 'foreach'
 
@@ -465,6 +490,9 @@ type parser {
         }
 
         this.parse_stmt_block(result.stmts, "'foreach' loop")
+        this.pop_scope()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -477,6 +505,7 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         this.eat(3) # 'for'
 
@@ -496,6 +525,9 @@ type parser {
         }
 
         this.parse_stmt_block(result.stmts, "'for' loop")
+        this.pop_scope()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -508,6 +540,7 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         this.eat(5) # 'while'
 
@@ -523,6 +556,9 @@ type parser {
         }
 
         this.parse_stmt_block(result.stmts, "'while' loop")
+        this.pop_scope()
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -535,10 +571,12 @@ type parser {
         result.cxt = context.from(this.cur_cxt)
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         this.eat(2) # 'do'
 
         this.parse_stmt_block(result.stmts, "'do while' loop")
+        this.pop_scope()
 
         this.expect$kwd_while("'while'")
 
@@ -546,6 +584,8 @@ type parser {
         if result.cond.is_none() {
             this.error_on_next_token("Invalid conditional expression in 'do while' loop.")
         }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -609,7 +649,7 @@ type parser {
         result    := moduledecl.create()
         result.cxt = context.from(this.cur_cxt)
 
-        this.eat(6) # 'import'
+        this.eat(6) # 'module'
 
         this.expect$identifier(result.ident, "module name")
 
@@ -622,11 +662,7 @@ type parser {
                 .report()
         }
 
-        if pool : threadpool ref = this.pool {
-            this.module_idx = this.fe.add_new_module_scope_locked(result.ident)
-        } else {
-            this.module_idx = this.fe.add_new_module_scope(result.ident)
-        }
+        this.push_new_module_scope(result.ident)
 
         return add(this.all_nodes, result)
     }
@@ -640,6 +676,7 @@ type parser {
                 p                 := new async_parser
                 @p                 = async_parser.create(this.fe, pool, stored_path, f, kind: parserkind.IMPORT)
                 p.introduction_cxt = intro_cxt
+                p.scope_stack.push(&this.fe.global_scope)
 
                 pool.add_task(async_parser_wrapper, p)
             }
@@ -651,6 +688,7 @@ type parser {
 
                 p := parser.create(this.fe, stored_path, f, kind: parserkind.IMPORT)
                 p.introduction_cxt = intro_cxt
+                p.scope_stack.push(&this.fe.global_scope)
                 p.go()
             }
         }
@@ -670,6 +708,8 @@ type parser {
                 p.introduction_cxt = intro_cxt
                 p.module_idx       = this.module_idx
 
+                p.scope_stack.push(this.scope_stack.back())
+
                 pool.add_task(async_parser_wrapper, p)
             } else {
                 frontend::multiple_include_error(path, intro_cxt)
@@ -682,6 +722,8 @@ type parser {
                 p.inc_container    = container
                 p.introduction_cxt = intro_cxt
                 p.module_idx       = this.module_idx
+
+                p.scope_stack.push(this.scope_stack.back())
 
                 p.go()
             } else {
@@ -773,16 +815,19 @@ type parser {
         return r
     }
 
-    proc parse_declaration(this) : astref {
+    proc __inline__ parse_declaration(this) : astref {
+        return this.parse_declaration(do_var_declare: true)
+    }
+    proc parse_declaration(this, do_var_declare : bool) : astref {
         result : astref = nothing
 
-        if (result = this.parse_proc_def()     ).is_none()
-        if (result = this.parse_type_def()     ).is_none()
-        if (result = this.parse_enum_def()     ).is_none()
-        if (result = this.parse_constant_decl()).is_none()
-        if (result = this.parse_extern()       ).is_none()
-        if (result = this.parse_var_decl()     ).is_none()
-        if (result = this.parse_directive()    ).is_none()
+        if (result = this.parse_proc_def()              ).is_none()
+        if (result = this.parse_type_def()              ).is_none()
+        if (result = this.parse_enum_def()              ).is_none()
+        if (result = this.parse_constant_decl()         ).is_none()
+        if (result = this.parse_extern()                ).is_none()
+        if (result = this.parse_var_decl(do_var_declare)).is_none()
+        if (result = this.parse_directive()             ).is_none()
         {
             # Found nothing. Return nothing.
         }
@@ -812,6 +857,8 @@ type parser {
         if is_inline    { result.set_flag(ast_flag.IS_INLINE) }
 
         result.set_flag(ast_flag.OPENS_SCOPE)
+
+        this.push_new_scope()
 
         ident := { string: }
         has_ident := this.optional$identifier(ident)
@@ -873,28 +920,34 @@ type parser {
                 this.error_on_next_token("Expected return type declarator for procedure declaration.")
             }
         } else {
-            void_decl        := ast::new_void_declarator(this.all_nodes)
-            void_decl.cxt     = this.just_cleaned_cxt
-            void_decl.cxt.end = void_decl.cxt.beg
-            result.ret_decl   = add(this.all_nodes, void_decl)
+            void_cxt        := this.just_cleaned_cxt
+            void_cxt.end     = void_cxt.beg
+            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt)
         }
 
         this.parse_stmt_block(result.stmts, "procedure")
+
+        this.pop_scope()
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         template_result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         if is_template {
+            result.set_flag(ast_flag.IS_TEMPLATE)
             template_result.template = add(this.all_nodes, result)
             template_result.name     = result.name.copy()
             template_result.name_cxt = result.name_cxt
-            return add(this.all_nodes, template_result)
+            t := add(this.all_nodes, template_result)
+            this.declare(t)
+            return t
         }
 
         # @destroy ??
         # template_result.destroy()
 
-        return add(this.all_nodes, result)
+        p := add(this.all_nodes, result)
+        this.declare(p)
+        return p
     }
 
     proc parse_template_def(this) : astref {
@@ -982,7 +1035,7 @@ type parser {
 
             this.expect$l_brace("'{'")
             while true {
-                decl := this.parse_declaration()
+                decl := this.parse_declaration(do_var_declare: false)
                 if decl.is_none() { break }
 
                 # @unsafe
@@ -1007,13 +1060,21 @@ type parser {
         template_result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         if not template_def.is_none() {
+            result.set_flag(ast_flag.IS_TEMPLATE)
+            foreach d in result.declarations {
+                unsafe_baseref(d).set_flag(ast_flag.IS_TEMPLATE)
+            }
             template_result.template_def = template_def
             template_result.template     = add(this.all_nodes, result)
 
-            return add(this.all_nodes, template_result)
+            t := add(this.all_nodes, template_result)
+            this.declare(t)
+            return t
         }
 
-        return add(this.all_nodes, result)
+        t := add(this.all_nodes, result)
+        this.declare(t)
+        return t
     }
 
     proc parse_enum_def(this) : astref {
@@ -1044,7 +1105,9 @@ type parser {
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        return add(this.all_nodes, result)
+        e := add(this.all_nodes, result)
+        this.declare(e)
+        return e
     }
 
     proc parse_extern(this) : astref {
@@ -1105,6 +1168,7 @@ type parser {
                 param.name = make_uid(hint.c_str())
                 hint.free()
                 param.type_decl = param_type
+                param.cxt = unsafe_baseref(param_type).cxt
 
                 result.param_decls.push(add(this.all_nodes, param))
             }
@@ -1121,11 +1185,12 @@ type parser {
                 this.error_on_next_token("Expected return type declarator for procedure declaration.")
             }
         } else {
-            void_decl        := ast::new_void_declarator(this.all_nodes)
-            void_decl.cxt     = this.just_cleaned_cxt
-            void_decl.cxt.end = void_decl.cxt.beg
-            result.ret_decl   = add(this.all_nodes, void_decl)
+            void_cxt        := this.just_cleaned_cxt
+            void_cxt.end     = void_cxt.beg
+            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt)
         }
+
+        result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
         return add(this.all_nodes, result)
     }
@@ -1464,6 +1529,8 @@ type parser {
         # NOTE: started this, but I've not really done any measurement.
         # NOTE the second: The order of some of these are sensitive. e.g.
         # LEQ must come before LSS.
+        # NOTE the third: We could do something like a jump table on the first char
+        # of the operator.
 
         if      this.optional$l_paren      (skip_eat: true) { op = Op.CALL
             # Calls must be on the same line.
@@ -2001,10 +2068,9 @@ type parser {
                 this.error_on_next_token("Expected return type declarator for prodecure type declarator.")
             }
         } else {
-            void_decl        := new_void_declarator(this.all_nodes)
-            void_decl.cxt     = this.just_cleaned_cxt
-            void_decl.cxt.end = void_decl.cxt.beg
-            result.ret_decl   = add(this.all_nodes, void_decl)
+            void_cxt        := this.just_cleaned_cxt
+            void_cxt.end     = void_cxt.beg
+            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt)
         }
 
         this.expect$gtr("'>'")
@@ -2271,6 +2337,75 @@ type parser {
         c.finish(this.cur_cxt)
         return c
     }
+
+    proc acquire_current_scope(this) : scope ref {
+        debug_assert(this.scope_stack.len() > 0, "no scope to acquire")
+
+        s := getref(@this.scope_stack.back())
+
+        if this.scope_stack.len() == 1 {
+            if s.parent_scope.is_none() {
+                this.fe.global_scope_lock.lock()
+            } else if inc : include_container ref = this.inc_container {
+                inc.lock.lock()
+            }
+        }
+
+        return s
+    }
+
+    proc release_current_scope(this) {
+        debug_assert(this.scope_stack.len() > 0, "no scope to release")
+
+        scope := getref(@this.scope_stack.back())
+
+        if this.scope_stack.len() == 1 {
+            if scope.parent_scope.is_none() {
+                this.fe.global_scope_lock.unlock()
+            } else if inc : include_container ref = this.inc_container {
+                inc.lock.unlock()
+            }
+        }
+    }
+
+    proc push_new_scope(this) {
+        cur_scope := this.acquire_current_scope()
+        new_scope := this.all_subscopes.push(scope.create(cur_scope))
+        cur_scope.sub_scopes.push(&new_scope)
+        this.release_current_scope()
+
+        this.scope_stack.push(&new_scope)
+    }
+
+    proc push_new_module_scope(this, module_name : string ref) {
+        if pool : threadpool ref = this.pool {
+            this.module_idx = this.fe.add_new_module_scope_locked(module_name)
+        } else {
+            this.module_idx = this.fe.add_new_module_scope(module_name)
+        }
+
+        cur_scope := this.acquire_current_scope()
+        new_scope := this.fe.global_scope.get_module_scope_by_idx(this.module_idx)
+        cur_scope.sub_scopes.push(&new_scope)
+        this.release_current_scope()
+
+        this.scope_stack.push(&new_scope)
+    }
+
+    proc pop_scope(this) {
+        this.scope_stack.pop()
+    }
+
+    proc declare(this, m_node : astref) {
+        debug_assert(not m_node.is_none(), "null node in declare()")
+
+        node  := unsafe_ast_ref(m_node)
+        scope := this.acquire_current_scope()
+
+        add_to_scope(scope, node)
+
+        this.release_current_scope()
+    }
 }
 
 type async_parser extends parser {
@@ -2348,33 +2483,33 @@ new_bin_expr_from_op_jump_table : <() : ast>[Op.N_OPS as u32]
 
 proc init_new_bin_expr_from_op_jump_table() {
     new_bin_expr_from_op_jump_table.fill(Op.N_OPS,
-        proc __inline__ () : ast { debug_assert(false, "invalid bin op") return nothing })
+        proc () : ast { debug_assert(false, "invalid bin op") return nothing })
 
-    new_bin_expr_from_op_jump_table[Op.CALL         as u32] = proc __inline__ () : ast return callexpr.create()
-    new_bin_expr_from_op_jump_table[Op.SUBSCRIPT    as u32] = proc __inline__ () : ast return subscriptexpr.create()
-    new_bin_expr_from_op_jump_table[Op.DOT          as u32] = proc __inline__ () : ast return dotexpr.create()
-    new_bin_expr_from_op_jump_table[Op.MULT         as u32] = proc __inline__ () : ast return multexpr.create()
-    new_bin_expr_from_op_jump_table[Op.DIV          as u32] = proc __inline__ () : ast return divexpr.create()
-    new_bin_expr_from_op_jump_table[Op.MOD          as u32] = proc __inline__ () : ast return modexpr.create()
-    new_bin_expr_from_op_jump_table[Op.PLUS         as u32] = proc __inline__ () : ast return plusexpr.create()
-    new_bin_expr_from_op_jump_table[Op.MINUS        as u32] = proc __inline__ () : ast return minusexpr.create()
-    new_bin_expr_from_op_jump_table[Op.BSHL         as u32] = proc __inline__ () : ast return bshlexpr.create()
-    new_bin_expr_from_op_jump_table[Op.BSHR         as u32] = proc __inline__ () : ast return bshrexpr.create()
-    new_bin_expr_from_op_jump_table[Op.LSS          as u32] = proc __inline__ () : ast return lssexpr.create()
-    new_bin_expr_from_op_jump_table[Op.LEQ          as u32] = proc __inline__ () : ast return leqexpr.create()
-    new_bin_expr_from_op_jump_table[Op.GTR          as u32] = proc __inline__ () : ast return gtrexpr.create()
-    new_bin_expr_from_op_jump_table[Op.GEQ          as u32] = proc __inline__ () : ast return geqexpr.create()
-    new_bin_expr_from_op_jump_table[Op.EQU          as u32] = proc __inline__ () : ast return equexpr.create()
-    new_bin_expr_from_op_jump_table[Op.NEQ          as u32] = proc __inline__ () : ast return neqexpr.create()
-    new_bin_expr_from_op_jump_table[Op.BAND         as u32] = proc __inline__ () : ast return bandexpr.create()
-    new_bin_expr_from_op_jump_table[Op.BXOR         as u32] = proc __inline__ () : ast return bxorexpr.create()
-    new_bin_expr_from_op_jump_table[Op.BOR          as u32] = proc __inline__ () : ast return borexpr.create()
-    new_bin_expr_from_op_jump_table[Op.AND          as u32] = proc __inline__ () : ast return andexpr.create()
-    new_bin_expr_from_op_jump_table[Op.OR           as u32] = proc __inline__ () : ast return orexpr.create()
-    new_bin_expr_from_op_jump_table[Op.ASSIGN       as u32] = proc __inline__ () : ast return assignexpr.create()
-    new_bin_expr_from_op_jump_table[Op.MULT_ASSIGN  as u32] = proc __inline__ () : ast return multassignexpr.create()
-    new_bin_expr_from_op_jump_table[Op.DIV_ASSIGN   as u32] = proc __inline__ () : ast return divassignexpr.create()
-    new_bin_expr_from_op_jump_table[Op.MOD_ASSIGN   as u32] = proc __inline__ () : ast return modassignexpr.create()
-    new_bin_expr_from_op_jump_table[Op.PLUS_ASSIGN  as u32] = proc __inline__ () : ast return plusassignexpr.create()
-    new_bin_expr_from_op_jump_table[Op.MINUS_ASSIGN as u32] = proc __inline__ () : ast return minusassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.CALL         as u32] = proc () : ast return callexpr.create()
+    new_bin_expr_from_op_jump_table[Op.SUBSCRIPT    as u32] = proc () : ast return subscriptexpr.create()
+    new_bin_expr_from_op_jump_table[Op.DOT          as u32] = proc () : ast return dotexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MULT         as u32] = proc () : ast return multexpr.create()
+    new_bin_expr_from_op_jump_table[Op.DIV          as u32] = proc () : ast return divexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MOD          as u32] = proc () : ast return modexpr.create()
+    new_bin_expr_from_op_jump_table[Op.PLUS         as u32] = proc () : ast return plusexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MINUS        as u32] = proc () : ast return minusexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BSHL         as u32] = proc () : ast return bshlexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BSHR         as u32] = proc () : ast return bshrexpr.create()
+    new_bin_expr_from_op_jump_table[Op.LSS          as u32] = proc () : ast return lssexpr.create()
+    new_bin_expr_from_op_jump_table[Op.LEQ          as u32] = proc () : ast return leqexpr.create()
+    new_bin_expr_from_op_jump_table[Op.GTR          as u32] = proc () : ast return gtrexpr.create()
+    new_bin_expr_from_op_jump_table[Op.GEQ          as u32] = proc () : ast return geqexpr.create()
+    new_bin_expr_from_op_jump_table[Op.EQU          as u32] = proc () : ast return equexpr.create()
+    new_bin_expr_from_op_jump_table[Op.NEQ          as u32] = proc () : ast return neqexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BAND         as u32] = proc () : ast return bandexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BXOR         as u32] = proc () : ast return bxorexpr.create()
+    new_bin_expr_from_op_jump_table[Op.BOR          as u32] = proc () : ast return borexpr.create()
+    new_bin_expr_from_op_jump_table[Op.AND          as u32] = proc () : ast return andexpr.create()
+    new_bin_expr_from_op_jump_table[Op.OR           as u32] = proc () : ast return orexpr.create()
+    new_bin_expr_from_op_jump_table[Op.ASSIGN       as u32] = proc () : ast return assignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MULT_ASSIGN  as u32] = proc () : ast return multassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.DIV_ASSIGN   as u32] = proc () : ast return divassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MOD_ASSIGN   as u32] = proc () : ast return modassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.PLUS_ASSIGN  as u32] = proc () : ast return plusassignexpr.create()
+    new_bin_expr_from_op_jump_table[Op.MINUS_ASSIGN as u32] = proc () : ast return minusassignexpr.create()
 }

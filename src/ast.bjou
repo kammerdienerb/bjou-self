@@ -29,13 +29,11 @@ abstract type astbase {
     flags      : u32
     cxt        : context
     module_idx : i32
-    visited    : bool
 
 
     proc init(this) {
         this.flags      = 0
         this.module_idx = -1
-        this.visited    = false
     }
 
     proc __inline__ set_flag(this, flag : ast_flag) {
@@ -53,6 +51,7 @@ abstract type astbase {
 
 type include_container {
     nodes : bucket_array$astref
+    lock  : thread::mutex
 }
 
 include "ast/typed.bjou"
@@ -167,6 +166,7 @@ enum ast_flag {
     IS_INLINE,
     IS_EXTERN,
     IS_VARARG,
+    IS_TEMPLATE,
     ANONYMOUS_PROC,
     C_VARARG,
     LEAF_EXPR,
@@ -195,11 +195,14 @@ proc unsafe_ast_ref(this : astref) : ast ref {
     return @@(\__sum_data{ this } as ast**)
 }
 
-proc new_void_declarator(array : bucket_array$ast ref) : declarator {
+proc new_void_declarator(array : bucket_array$ast ref, cxt : context ref) : astref {
     d           := declarator.create()
-    d.identifier = add(array, qidentifier.create("void"))
+    d.cxt        = cxt
+    i           := qidentifier.create("void")
+    i.cxt        = cxt
+    d.identifier = add(array, i)
 
-    return d
+    return add(array, d)
 }
 
 enum visit_action {
@@ -207,7 +210,33 @@ enum visit_action {
     BREAK
 }
 
-proc visit(node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
+type visit_pre_fn  = <(ast ref, void*)>
+type visit_post_fn = <(ast ref, void*)>
+type visit_fn      = <(ast ref, void*) : visit_action>
+
+type visitor_t {
+    _pre  : visit_pre_fn
+    _post : visit_pre_fn
+    _vis  : visit_fn
+
+    proc pre(this, node : ast ref, arg : void*) {
+        if (this._pre as void*) != NULL {
+            this._pre(node, arg)
+        }
+    }
+
+    proc post(this, node : ast ref, arg : void*) {
+        if (this._post as void*) != NULL {
+            this._post(node, arg)
+        }
+    }
+
+    proc vis(this, node : ast ref, arg : void*) : visit_action {
+        return this._vis(node, arg)
+    }
+}
+
+proc visit(node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
     debug_assert(not node.is_none(), "can't visit a nothing node")
 
     if      x : declarator             = node { return x.visit(node, visitor, arg) }
@@ -300,10 +329,157 @@ proc visit(node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : vo
     return visit_action.BREAK
 }
 
-type visitors {
-    proc hello(node : ast ref, arg : void*) : visit_action {
-        unsafe_baseref(node).visited = true
-#         print "!!!"
+vis_decl_find := { visitor_t:
+    ._vis = proc (node : ast ref, arg : void*) : visit_action {
+        if decl : declaration = node {
+            name_ptr := arg as string*
+            if decl.name == @name_ptr {
+                ui::info_builder.create()
+                    .with_message("found matching declaration")
+                    .add_location(decl.name_cxt)
+                    .report()
+                    .free()
+            }
+        }
+
         return visit_action.CONTINUE
     }
 }
+
+vis_ast_print := { visitor_t:
+    ._pre = proc (node : ast ref, arg : void*) {
+        @(arg as int*) += 1
+    },
+
+    ._post = proc (node : ast ref, arg : void*) {
+        @(arg as int*) -= 1
+    },
+
+    ._vis = proc (node : ast ref, arg : void*) : visit_action {
+        level := @(arg as int*) - 1
+        for i := 0; i < level; i += 1 { printf(" ") }
+
+        if      x : declarator             = node { print "declarator"             }
+        else if x : arraydeclarator        = node { print "arraydeclarator"        }
+        else if x : slicedeclarator        = node { print "slicedeclarator"        }
+        else if x : dynamicarraydeclarator = node { print "dynamicarraydeclarator" }
+        else if x : pointerdeclarator      = node { print "pointerdeclarator"      }
+        else if x : refdeclarator          = node { print "refdeclarator"          }
+        else if x : sumdeclarator          = node { print "sumdeclarator"          }
+        else if x : tupledeclarator        = node { print "tupledeclarator"        }
+        else if x : procdeclarator         = node { print "procdeclarator"         }
+        else if x : vardecl                = node { print "vardecl: %", x.name.c_str() }
+        else if x : constantdecl           = node { print "constantdecl: %", x.name.c_str() }
+        else if x : procdef                = node { print "procdef: %", x.name.c_str() }
+        else if x : templateprocdef        = node { print "templateprocdef: %", x.name.c_str()        }
+        else if x : typedef                = node { print "typedef: %", x.name.c_str()                }
+        else if x : templatetypedef        = node { print "templatetypedef: %", x.name.c_str()        }
+        else if x : enumdef                = node { print "enumdef: %", x.name.c_str()                }
+        else if x : integerliteral         = node {
+            if x.is_signed {
+                print "integerliteral (%-bit signed): %", x.width, x.s_val
+            } else {
+                print "integerliteral (%-bit unsigned): %", x.width, x.u_val
+            }
+        }
+        else if x : floatliteral           = node { print "floatliteral: %", x.val }
+        else if x : stringliteral          = node { print "stringliteral: %", x.val.c_str() }
+        else if x : charliteral            = node { print "charliteral: %", x.val as int            }
+        else if x : boolliteral            = node { print "boolliteral: %", x.val            }
+        else if x : nothingliteral         = node { print "nothingliteral"         }
+        else if x : qidentifier            = node {
+            if x.sym_mod.len() != 0 {
+                print "qidentifier: %::%", x.sym_mod.c_str(), x.sym_name.c_str()
+            } else {
+                print "qidentifier: %", x.sym_name.c_str()
+            }
+        }
+        else if x : namedarg               = node { print "namedarg: %", x.name.c_str()               }
+        else if x : tupleliteral           = node { print "tupleliteral"           }
+        else if x : initializerlist        = node { print "initializerlist"        }
+        else if x : sliceliteral           = node { print "sliceliteral"           }
+        else if x : dynamicarrayliteral    = node { print "dynamicarrayliteral"    }
+        else if x : lenexpr                = node { print "lenexpr"                }
+        else if x : newexpr                = node { print "newexpr"                }
+        else if x : deleteexpr             = node { print "deleteexpr"             }
+        else if x : sizeofexpr             = node { print "sizeofexpr"             }
+        else if x : addrexpr               = node { print "addrexpr"               }
+        else if x : derefexpr              = node { print "derefexpr"              }
+        else if x : notexpr                = node { print "notexpr"                }
+        else if x : bnegexpr               = node { print "bnegexpr"               }
+        else if x : asexpr                 = node { print "asexpr"                 }
+        else if x : callexpr               = node { print "callexpr"               }
+        else if x : subscriptexpr          = node { print "subscriptexpr"          }
+        else if x : dotexpr                = node { print "dotexpr"                }
+        else if x : multexpr               = node { print "multexpr"               }
+        else if x : divexpr                = node { print "divexpr"                }
+        else if x : modexpr                = node { print "modexpr"                }
+        else if x : plusexpr               = node { print "plusexpr"               }
+        else if x : minusexpr              = node { print "minusexpr"              }
+        else if x : bshlexpr               = node { print "bshlexpr"               }
+        else if x : bshrexpr               = node { print "bshrexpr"               }
+        else if x : lssexpr                = node { print "lssexpr"                }
+        else if x : leqexpr                = node { print "leqexpr"                }
+        else if x : gtrexpr                = node { print "gtrexpr"                }
+        else if x : geqexpr                = node { print "geqexpr"                }
+        else if x : equexpr                = node { print "equexpr"                }
+        else if x : neqexpr                = node { print "neqexpr"                }
+        else if x : bandexpr               = node { print "bandexpr"               }
+        else if x : bxorexpr               = node { print "bxorexpr"               }
+        else if x : borexpr                = node { print "borexpr"                }
+        else if x : andexpr                = node { print "andexpr"                }
+        else if x : orexpr                 = node { print "orexpr"                 }
+        else if x : assignexpr             = node { print "assignexpr"             }
+        else if x : multassignexpr         = node { print "multassignexpr"         }
+        else if x : divassignexpr          = node { print "divassignexpr"          }
+        else if x : modassignexpr          = node { print "modassignexpr"          }
+        else if x : plusassignexpr         = node { print "plusassignexpr"         }
+        else if x : minusassignexpr        = node { print "minusassignexpr"        }
+        else if x : printstmt              = node { print "printstmt"              }
+        else if x : returnstmt             = node { print "returnstmt"             }
+        else if x : ifstmt                 = node { print "ifstmt"                 }
+        else if x : elsestmt               = node { print "elsestmt"               }
+        else if x : forstmt                = node { print "forstmt"                }
+        else if x : foreachstmt            = node { print "foreachstmt"            }
+        else if x : whilestmt              = node { print "whilestmt"              }
+        else if x : dowhilestmt            = node { print "dowhilestmt"            }
+        else if x : breakstmt              = node { print "breakstmt"              }
+        else if x : continuestmt           = node { print "continuestmt"           }
+        else if x : importstmt             = node { print "importstmt: %", x.path.c_str()             }
+        else if x : usingstmt              = node {
+            if not x.imprt.is_none() {
+                print "usingstmt"
+            } else {
+                print "usingstmt: %", x.ident.c_str()
+            }
+        }
+        else if x : includestmt            = node { print "includestmt: %", x.path.c_str()            }
+        else if x : thisparam              = node { print "thisparam"              }
+        else if x : thistype               = node { print "thistype"               }
+        else if x : templatedef            = node {
+            printf("templatedef: ")
+            lazy_comma := ""
+            foreach ref name in x.names {
+                printf("%s%s", lazy_comma, name.c_str())
+                lazy_comma = ", "
+            }
+            print ""
+        }
+        else if x : templateinst           = node { print "templateinst"           }
+        else if x : arglist                = node { print "arglist"                }
+        else if x : directive              = node { print "directive: %", x.name.c_str()              }
+        else if x : moduledecl             = node { print "moduledecl: %", x.ident.c_str()             }
+
+        return visit_action.CONTINUE
+    }
+}
+
+# @bad
+# Things don't compile if this goes at the top with the other imports.
+# But that's not how bJou is supposed to work.
+# Not sure why this is happening, but I'm just gonna keep going.
+# Make sure this isn't a problem still when this self-hosted compiler
+# is done.
+#                                                Brandon Kammerdiener
+#                                                April 24, 2020
+using import "scope.bjou"

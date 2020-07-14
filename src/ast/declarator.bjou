@@ -20,11 +20,17 @@ type declarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.identifier), visitor, arg)
+        a := visit(unsafe_ast_ref(this.identifier), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -44,8 +50,10 @@ type arraydeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.elem_decl), visitor, arg) == visit_action.BREAK {
@@ -55,6 +63,8 @@ type arraydeclarator extends declaratorbase {
         if visit(unsafe_ast_ref(this.expr), visitor, arg) == visit_action.BREAK {
             return visit_action.BREAK
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -74,11 +84,17 @@ type slicedeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -96,11 +112,17 @@ type dynamicarraydeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -118,11 +140,17 @@ type pointerdeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -140,11 +168,17 @@ type refdeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.elem_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -163,8 +197,10 @@ type sumdeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref o in this.option_decls {
@@ -172,6 +208,8 @@ type sumdeclarator extends declaratorbase {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -192,8 +230,10 @@ type tupledeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref s in this.sub_decls {
@@ -201,6 +241,8 @@ type tupledeclarator extends declaratorbase {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -222,8 +264,10 @@ type procdeclarator extends declaratorbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref p in this.param_decls {
@@ -232,7 +276,11 @@ type procdeclarator extends declaratorbase {
             }
         }
 
-        return visit(unsafe_ast_ref(this.ret_decl), visitor, arg)
+        a := visit(unsafe_ast_ref(this.ret_decl), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 

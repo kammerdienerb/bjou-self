@@ -12,8 +12,11 @@ type breakstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -28,8 +31,11 @@ type continuestmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -49,8 +55,10 @@ type dowhilestmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
@@ -62,6 +70,8 @@ type dowhilestmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -82,8 +92,10 @@ type elsestmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref s in this.stmts {
@@ -91,6 +103,8 @@ type elsestmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -113,8 +127,10 @@ type foreachstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.var), visitor, arg) == visit_action.BREAK {
@@ -130,6 +146,8 @@ type foreachstmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -153,8 +171,10 @@ type forstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if i : ast ref = this.ini {
@@ -177,6 +197,8 @@ type forstmt extends statement {
             }
         }
 
+        visitor.post(node, arg)
+
         return visit_action.CONTINUE
     }
 }
@@ -198,8 +220,10 @@ type ifstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
@@ -217,6 +241,8 @@ type ifstmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -237,8 +263,11 @@ type importstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -258,8 +287,25 @@ type includestmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
+            return visit_action.BREAK
+
+        if ic : include_container ref = this.container {
+            for it := ic.nodes.iter(); not it.is_end(); it.next() {
+                if included_node : ast ref = it.val() {
+                    if visit(included_node, visitor, arg) == visit_action.BREAK {
+                        break
+                    }
+                }
+            }
+        }
+
+        visitor.post(node, arg)
+
+        return visit_action.CONTINUE
     }
 }
 
@@ -277,11 +323,17 @@ type printstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
-        return visit(unsafe_ast_ref(this.args), visitor, arg)
+        a := visit(unsafe_ast_ref(this.args), visitor, arg)
+
+        visitor.post(node, arg)
+
+        return a
     }
 }
 
@@ -299,8 +351,10 @@ type returnstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if e : ast ref = this.expr {
@@ -308,6 +362,8 @@ type returnstmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -329,8 +385,10 @@ type usingstmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if i : ast ref = this.imprt {
@@ -338,6 +396,8 @@ type usingstmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }
@@ -359,8 +419,10 @@ type whilestmt extends statement {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         if visit(unsafe_ast_ref(this.cond), visitor, arg) == visit_action.BREAK {
@@ -372,6 +434,8 @@ type whilestmt extends statement {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }

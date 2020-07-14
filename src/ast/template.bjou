@@ -14,8 +14,11 @@ type templatedef extends astbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        return visitor(node, arg)
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+        a := visitor.vis(node, arg)
+        visitor.post(node, arg)
+        return a
     }
 }
 
@@ -33,8 +36,10 @@ type templateinst extends astbase {
         return r
     }
 
-    proc visit(this, node : ast ref, visitor : <(ast ref, void*) : visit_action>, arg : void*) : visit_action {
-        if visitor(node, arg) == visit_action.BREAK
+    proc visit(this, node : ast ref, visitor : visitor_t, arg : void*) : visit_action {
+        visitor.pre(node, arg)
+
+        if visitor.vis(node, arg) == visit_action.BREAK
             return visit_action.BREAK
 
         foreach ref p in this.type_params {
@@ -42,6 +47,8 @@ type templateinst extends astbase {
                 return visit_action.BREAK
             }
         }
+
+        visitor.post(node, arg)
 
         return visit_action.CONTINUE
     }

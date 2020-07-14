@@ -5,9 +5,16 @@
 module bjou_debug
 
 using import "defs.bjou"
+using import "globals.bjou" # output_lock
+
+
 
 proc __inline__ debug_assert(cond : bool, msg : char*) {
     \static_if{ BJOU_DEBUG
-        if not cond    \die{ msg }
+        if not cond {
+            output_lock.lock()
+            \die{ msg }
+            output_lock.unlock()
+        }
     }
 }

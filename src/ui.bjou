@@ -307,6 +307,56 @@ type warning_builder extends error_builder_base {
     }
 }
 
+type info_builder extends error_builder_base {
+    proc create() : info_builder ref {
+        r := new info_builder
+        @r = { info_builder:
+            .message   = str(),
+            .pieces    = [...error_piece],
+        }
+
+        return @r
+    }
+
+    proc with_message(this, msg : char*) : info_builder ref {
+        error_builder_base.with_message(this, msg)
+        return this
+    }
+
+    proc add_note(this, note : char*) : info_builder ref {
+        error_builder_base.add_note(this, note)
+        return this
+    }
+
+    proc add_location(this, msg : char*, cxt : context) : info_builder ref {
+        error_builder_base.add_location(this, msg, cxt)
+        return this
+    }
+
+    proc add_location(this, cxt : context) : info_builder ref {
+        error_builder_base.add_location(this, cxt)
+        return this
+    }
+
+    proc report(this) : info_builder ref {
+        output_lock.lock()
+
+        write_info(this.message)
+        idx := 0
+        foreach ref piece in this.pieces {
+            if idx > 0    { file.stderr().write("\n", 1) }
+
+            this.report_piece(piece, source_highlight_attr: Attr.YELLOW, normal_code_attr: Attr.CYAN)
+            idx += 1
+        }
+        if |this.pieces| > 0    { file.stderr().write("\n", 1) }
+
+        output_lock.unlock()
+
+        return this
+    }
+}
+
 enum Attr {
     RESET,
     BOLD,
@@ -684,6 +734,22 @@ proc write_error(message : string ref) {
 proc write_warning(message : string ref) {
     e        := str("Warning: ")
     strattr(e, get_attr(Attr.MAGENTA))
+    # message' := concat(message.copy(), str('\n'))
+    message' := str()
+    message'.append(message.copy())
+    message'.append('\n')
+    strattr(message', get_attr(Attr.GREEN))
+
+    file.stderr().write(e)
+    file.stderr().write(message')
+
+    message'.free()
+    e.free()
+}
+
+proc write_info(message : string ref) {
+    e        := str("Info: ")
+    strattr(e, get_attr(Attr.YELLOW))
     # message' := concat(message.copy(), str('\n'))
     message' := str()
     message'.append(message.copy())
