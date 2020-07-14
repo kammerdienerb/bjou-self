@@ -1,3 +1,2 @@
 vimish-bind normal ctrl-y CMD less "./debug_build.sh"
 vimish-bind normal ctrl-t CMD less "./brun.sh --no-color 2>&1"
-style hat
