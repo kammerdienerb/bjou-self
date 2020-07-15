@@ -718,6 +718,13 @@ proc error(message : string ref, fatal : bool) {
     output_lock.unlock()
 }
 
+proc warn(message : char*) {
+    output_lock.lock()
+    s := str(message)
+    write_warning(s)
+    output_lock.unlock()
+}
+
 proc write_error(message : string ref) {
     e        := str("Error: ")
     strattr(e, get_attr(Attr.RED))

@@ -47,6 +47,7 @@ type parser {
     module_idx          : i32
     all_subscopes       : bucket_array$scope
     scope_stack         : scope*[...]
+    disable_scoping     : int
 
 
     proc init(this, f : file, kind : parserkind) {
@@ -57,6 +58,7 @@ type parser {
         this.module_idx          = -1
         this.all_subscopes       = bucket_array$scope.create()
         this.scope_stack         = [...scope*]
+        this.disable_scoping     = 0
     }
 
     proc create(fe : frontend ref, path : string ref, f : file, kind : parserkind) : parser {
@@ -628,6 +630,10 @@ type parser {
         this.expect$identifier_allow_reserved(result.name, "directive name")
         this.expect$l_brace("'{'")
 
+        if result.name == "static_if" {
+            this.push_no_scoping()
+        }
+
         while true {
             node : astref = nothing
             if (node = this.parse_top_level() ).is_none()
@@ -637,6 +643,10 @@ type parser {
             result.args.push(node)
         }
         this.expect$r_brace("'}'")
+
+        if result.name == "static_if" {
+            this.pop_no_scoping()
+        }
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         return add(this.all_nodes, result)
@@ -856,16 +866,16 @@ type parser {
         if no_mangle    { result.set_flag(ast_flag.NO_MANGLE) }
         if is_inline    { result.set_flag(ast_flag.IS_INLINE) }
 
-        result.set_flag(ast_flag.OPENS_SCOPE)
-
-        this.push_new_scope()
-
         ident := { string: }
         has_ident := this.optional$identifier(ident)
-        result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
-        if not has_ident {
+        if has_ident {
+            result.name_cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
+        } else {
             ident = make_uid("anon_p")
             result.set_flag(ast_flag.ANONYMOUS_PROC)
+            result.name_cxt.beg     = result.cxt.beg
+            result.name_cxt.end     = result.cxt.beg
+            result.name_cxt.end.ch += 3
         }
         result.name = ident
 
@@ -889,7 +899,12 @@ type parser {
             }
 
             template_result.template_def = template_def
+
+            this.push_no_scoping()
         }
+
+        result.set_flag(ast_flag.OPENS_SCOPE)
+        this.push_new_scope()
 
         if result.get_flag(ast_flag.ANONYMOUS_PROC) {
             this.expect$l_paren("identifier or '(' to begin an anonymous procedure")
@@ -939,6 +954,7 @@ type parser {
             template_result.name_cxt = result.name_cxt
             t := add(this.all_nodes, template_result)
             this.declare(t)
+            this.pop_no_scoping()
             return t
         }
 
@@ -1011,6 +1027,11 @@ type parser {
         template_result.name_cxt = result.name_cxt
 
         template_def := this.parse_template_def()
+        is_template  := not template_def.is_none()
+
+        if is_template {
+            this.push_no_scoping()
+        }
 
         if this.optional$assign() {
             if is_abstract {
@@ -1059,7 +1080,7 @@ type parser {
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         template_result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        if not template_def.is_none() {
+        if is_template {
             result.set_flag(ast_flag.IS_TEMPLATE)
             foreach d in result.declarations {
                 unsafe_baseref(d).set_flag(ast_flag.IS_TEMPLATE)
@@ -1069,6 +1090,7 @@ type parser {
 
             t := add(this.all_nodes, template_result)
             this.declare(t)
+            this.pop_no_scoping()
             return t
         }
 
@@ -2358,6 +2380,15 @@ type parser {
         return c
     }
 
+    proc __inline__ push_no_scoping(this) {
+        this.disable_scoping += 1
+    }
+
+    proc __inline__ pop_no_scoping(this) {
+        this.disable_scoping -= 1
+        debug_assert(this.disable_scoping >= 0, "push/pop no_scoping mismatch")
+    }
+
     proc acquire_current_scope(this) : scope ref {
         debug_assert(this.scope_stack.len() > 0, "no scope to acquire")
 
@@ -2418,6 +2449,10 @@ type parser {
 
     proc declare(this, m_node : astref) {
         debug_assert(not m_node.is_none(), "null node in declare()")
+
+        if this.disable_scoping {
+            return
+        }
 
         node  := unsafe_ast_ref(m_node)
         scope := this.acquire_current_scope()
