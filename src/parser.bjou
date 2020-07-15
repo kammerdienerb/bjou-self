@@ -74,8 +74,11 @@ type parser {
         # There is no need to free these bucket_arrays because they are freed
         # in merge_and_steal_data() in transfer_to_fe().
 
+        # this.all_subscopes.free()
         # this.all_nodes.free()
         # this.top_level_nodes.free()
+
+        this.f.close()
 
         this.scope_stack.free()
 
@@ -787,7 +790,15 @@ type parser {
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
 
-        return add(this.all_nodes, result)
+        node := add(this.all_nodes, result)
+
+        # @here
+        # So, we were adding this little thing so that we can patch up
+        # the scope using lists before we run resolve_identifiers().
+        # Just need to go add the patch code to the front end.
+        this.fe.add_using_scope_pair(unsafe_ast_ref(node), this.get_pointer_to_current_scope())
+
+        return node
     }
 
     proc parse_include(this) : astref {
@@ -937,7 +948,7 @@ type parser {
         } else {
             void_cxt        := this.just_cleaned_cxt
             void_cxt.end     = void_cxt.beg
-            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt)
+            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt, this.get_pointer_to_current_scope())
         }
 
         this.parse_stmt_block(result.stmts, "procedure")
@@ -1209,7 +1220,7 @@ type parser {
         } else {
             void_cxt        := this.just_cleaned_cxt
             void_cxt.end     = void_cxt.beg
-            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt)
+            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt, this.get_pointer_to_current_scope())
         }
 
         result.cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
@@ -1706,7 +1717,8 @@ type parser {
             result.sym_name = name
         }
 
-        result.template_inst = this.parse_template_inst()
+        result.template_inst   = this.parse_template_inst()
+        result.enclosing_scope = this.get_pointer_to_current_scope()
 
         cxt.finish(this.cur_cxt, this.just_cleaned_cxt)
         result.cxt = cxt
@@ -2092,7 +2104,7 @@ type parser {
         } else {
             void_cxt        := this.just_cleaned_cxt
             void_cxt.end     = void_cxt.beg
-            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt)
+            result.ret_decl  = ast::new_void_declarator(this.all_nodes, void_cxt, this.get_pointer_to_current_scope())
         }
 
         this.expect$gtr("'>'")
@@ -2387,6 +2399,12 @@ type parser {
     proc __inline__ pop_no_scoping(this) {
         this.disable_scoping -= 1
         debug_assert(this.disable_scoping >= 0, "push/pop no_scoping mismatch")
+    }
+
+    proc __inline__ get_pointer_to_current_scope(this) : scope* {
+        debug_assert(this.scope_stack.len() > 0, "no scope to acquire")
+
+        return &getref(@this.scope_stack.back())
     }
 
     proc acquire_current_scope(this) : scope ref {

@@ -3,12 +3,18 @@
 module ty
 
 using import "utils.bjou"
+using import "hash_table.bjou"
+using import "hash_functions.bjou"
 
-type ty    = (tyint | tyfloat | typointer | tystruct | tytemplatestruct | tyenum | tyunknown)
+type ty    = (tyvoid | tyint | tyfloat | typointer | tystruct | tytemplatestruct | tyenum | tyunknown)
 type tyref = (ty ref | none)
 
 type tyunknown {}
-type tyint { }
+type tyvoid { }
+type tyint {
+    width     : u8
+    is_signed : bool
+}
 type tyfloat { }
 type typointer { }
 
@@ -57,3 +63,9 @@ type tytemplatestruct {
     }
 }
 
+proc install_builtin_types(type_table : hash_table$(string, ty, str_hasher) ref) {
+    s := str()
+
+    s.set("void")
+        type_table.insert(s, {tyvoid:})
+}

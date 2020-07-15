@@ -1,0 +1,2 @@
+--  I've got some nasty multithreading bug that I can't work out.
+    It happens in approximately 1 in 20 runs.

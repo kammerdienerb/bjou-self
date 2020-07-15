@@ -34,8 +34,7 @@ type async_module_scope_info {
 enum phases {
     NONE,
     PARSING,
-    SYMBOLS_GLOBAL,
-    SYMBOLS_REST,
+    SYMBOLS,
     TYPES
 }
 
@@ -56,12 +55,14 @@ type frontend {
     # @bug 9 @bug 13
     # Shouldn't have to qualify the ty module here.
     type_table         : hash_table$(string, ty::ty, str_hasher)
+    using_scope_list   : pair$(ast ref, scope*)[...]
 
     merge_lock             : mutex
     include_container_lock : mutex
     files_seen_lock        : mutex
     global_scope_lock      : mutex
     alloc_subscope_lock    : mutex
+    using_scope_list_lock  : mutex
 
 
     proc create() : frontend {
@@ -75,11 +76,13 @@ type frontend {
             .all_subscopes          = bucket_array$scope.create(),
             .type_nodes             = bucket_array$astref.create(),
             .type_table             = hash_table$(string, ty, str_hasher).create(),
+            .using_scope_list       = [...pair$(ast ref, scope*)],
             .merge_lock             = mutex.create(),
             .include_container_lock = mutex.create(),
             .files_seen_lock        = mutex.create(),
             .global_scope_lock      = mutex.create(),
             .alloc_subscope_lock    = mutex.create(),
+            .using_scope_list_lock  = mutex.create(),
         }
     }
 
@@ -97,13 +100,14 @@ type frontend {
         }
 
         # do work
+        install_builtin_types(this.type_table)
+
         this.do_parsing()
         if compil.args.syntax_only {
             return
         }
 
-        d := digraph$astref.create()
-#         this.do_symbols()
+        this.do_symbols()
 #         this.do_type_table()
 
         if pool : threadpool ref = this.pool {
@@ -187,25 +191,9 @@ type frontend {
     }
 
     proc do_symbols(this) {
-        this.phase = phases.SYMBOLS_GLOBAL
+        this.phase = phases.SYMBOLS
 
         symbols_beg := measure_time_now_ms()
-
-        this.symbols_top_level()
-
-        procs := [...astref]
-
-        this.phase = phases.SYMBOLS_REST
-
-        filter_scopes_from_bucket_array(this.top_level_nodes, procs)
-
-        if pool : threadpool ref = this.pool {
-            this.symbols_rest_parallel(pool, procs)
-        } else {
-            this.symbols_rest_serial(procs)
-        }
-
-        procs.free()
 
         # @incomplete
         # Once we have a type system in place and working, we need to
@@ -214,13 +202,13 @@ type frontend {
         # Actually, maybe this should be done on the fly also as we type-check
         # everything.
 
+        this.resolve_identifiers()
+
         symbols_end := measure_time_now_ms()
 
         if compil.args.dump_symbols {
             this.global_scope.show()
         }
-
-        this.resolve_identifiers()
 
         if compil.args.stats {
             using ui
@@ -230,91 +218,12 @@ type frontend {
 
     }
 
-    proc symbols_top_level(this) {
-        add_nodes_to_top_level_scope(this.global_scope, this.top_level_nodes, this.type_nodes)
-    }
-
-    proc __inline__ symbols_one(this, module_idx : i32, node : ast ref) {
-        if module_idx == -1 {
-            recursively_build_subscopes(this.global_scope, node)
-        } else {
-            module_scope := this.global_scope.get_module_scope_by_idx(module_idx)
-            recursively_build_subscopes(module_scope, node)
-        }
-    }
-
-    proc symbols_rest_serial(this, procs : astref[...] ref) {
-        foreach m_node in procs {
-            # @unsafe
-            # Nodes are only added to procs if they aren't 'nothing'.
-            node       := unsafe_ast_ref(m_node)
-            module_idx := unsafe_baseref(node).module_idx
-            this.symbols_one(module_idx, node)
-        }
-    }
-
-    proc symbols_module_thread(arg : void*) {
-        info := arg as async_module_scope_info*
-
-        foreach m_node in info.nodes {
-            # @unsafe
-            # Nodes are only added to info.nodes if they aren't 'nothing'.
-            node := unsafe_ast_ref(m_node)
-            (info.fe).symbols_one(info.idx, node)
-        }
-        delete info
-    }
-
-    proc symbols_rest_parallel(this, pool : threadpool ref, procs : astref[...] ref) {
-        max_module_idx      := this.global_scope.module_scopes.size
-        procs_by_module_idx := [...astref[...]]
-        procs_by_module_idx.resize(max_module_idx + 1, [...astref])
-
-        foreach m_node in procs {
-            node       := unsafe_ast_ref(m_node)
-            module_idx := unsafe_baseref(node).module_idx
-
-            procs_by_module_idx[module_idx + 1].push(m_node)
-        }
-
-        for module_idx : i32 = 0; module_idx <= max_module_idx; module_idx += 1 {
-            info := new async_module_scope_info
-            @info = { async_module_scope_info:
-                .idx   = module_idx - 1,
-                .nodes = procs_by_module_idx[module_idx],
-                .fe    = this,
-            }
-            pool.add_task(frontend.symbols_module_thread, info as void*)
-        }
-
-        pool.wait()
-    }
-
     proc resolve_identifiers(this) {
-#         for it := this.all_nodes.iter(); not it.is_end(); it.next() {
-#             if unsafe_baseref(it.val()).get_flag(ast_flag.OPENS_SCOPE) {
-#                 if p : procdef = it.val() {
-#                     if  (not p.get_flag(ast_flag.IS_TEMPLATE))
-#                     and (not p.get_flag(ast_flag.ANONYMOUS_PROC))
-#                     and    unsafe_baseref(it.val()).scope.is_none() {
-#                         warning_builder.create()
-#                             .with_message("doesn't have a scope")
-#                             .add_location(unsafe_baseref(it.val()).cxt)
-#                             .report()
-#                             .free()
-#                     }
-#                 }
-#             }
-#             if i : qidentifier = it.val() {
-#                 if i._decl.is_none() {
-#                     warning_builder.create()
-#                         .with_message("identifier did not get resolved")
-#                         .add_location(i.cxt)
-#                         .report()
-#                         .free()
-#                 }
-#             }
-#         }
+        for it := this.all_nodes.iter(); not it.is_end(); it.next() {
+            if qid : qidentifier = it.val() {
+                resolve_identifier(qid)
+            }
+        }
     }
 
     proc do_type_table(this) {
@@ -467,32 +376,21 @@ type frontend {
             }
         }
     }
+
+    proc add_using_scope_pair(this, u : ast ref, s : scope*) {
+        this.using_scope_list_lock.lock()
+            p := pair$(ast ref, scope*).create(u, s)
+            this.using_scope_list.push(p)
+        this.using_scope_list_lock.unlock()
+    }
 }
 
-
-
-# @todo @performance
-# This should probably be done on a per-thread basis so that we
-# can avoid the locking entirely.
-# There are going to be many scopes in a large program, and so
-# even locking for a short time will have some overhead that we may
-# want to avoid.
-# The better solution is to give each thread its own bucket array of
-# scopes that it can allocate from.
-# Then at the end, we just merge them like we do for AST bucket arrays
-# in the parser.
-# For now, I'm going to leave it because it seems _pretty_ fast and I
-# want to get other things done.
-#
-#                                                   Brandon Kammerdiener
-#                                                   March 12, 2020
-
-proc alloc_sub_scope(sub : scope) : scope ref {
+proc fe_alloc_sub_scope(sub : scope) : scope ref {
     fe := getref(compil.front)
 
     if pool : threadpool ref = fe.pool {
         fe.alloc_subscope_lock.lock()
-            scope_ref := fe.all_subscopes.push(sub)
+            scope_ref := getref(fe.all_subscopes.push(sub))
         fe.alloc_subscope_lock.unlock()
 
         return scope_ref
@@ -500,7 +398,6 @@ proc alloc_sub_scope(sub : scope) : scope ref {
 
     return fe.all_subscopes.push(sub)
 }
-
 
 proc filter_scopes_from_bucket_array(nodes : bucket_array$astref ref, procs : astref[...] ref) {
     for it := nodes.iter(); not it.is_end(); it.next() {

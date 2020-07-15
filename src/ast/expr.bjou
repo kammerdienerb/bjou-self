@@ -392,10 +392,11 @@ type tupleliteral extends exprbase {
 }
 
 type qidentifier extends exprbase {
-    sym_name      : string
-    sym_mod       : string
-    template_inst : astref
-    _decl         : astref
+    sym_name        : string
+    sym_mod         : string
+    template_inst   : astref
+    _decl           : astref
+    enclosing_scope : scope*
 
 
     proc init(this) {
@@ -438,6 +439,8 @@ type qidentifier extends exprbase {
     }
 
     proc get_declaration(this) : ast ref {
+        debug_assert(not this.get_flag(ast_flag.IDENTIFIER_IS_BUILTIN_TYPE),
+                     "identifier refers to a built in type")
         debug_assert(not this._decl.is_none(),
                      "identifier did not get resolved")
 

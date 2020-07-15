@@ -174,7 +174,8 @@ enum ast_flag {
     IS_DESTRUCTURE,
     FOREACH_TAKE_REF,
     TYPE_ALIAS,
-    OPENS_SCOPE
+    OPENS_SCOPE,
+    IDENTIFIER_IS_BUILTIN_TYPE
 }
 
 proc unsafe_baseref(this : ast ref) : astbase ref {
@@ -195,12 +196,13 @@ proc unsafe_ast_ref(this : astref) : ast ref {
     return @@(\__sum_data{ this } as ast**)
 }
 
-proc new_void_declarator(array : bucket_array$ast ref, cxt : context ref) : astref {
-    d           := declarator.create()
-    d.cxt        = cxt
-    i           := qidentifier.create("void")
-    i.cxt        = cxt
-    d.identifier = add(array, i)
+proc new_void_declarator(array : bucket_array$ast ref, cxt : context ref, s : scope*) : astref {
+    d                 := declarator.create()
+    d.cxt              = cxt
+    i                 := qidentifier.create("void")
+    i.cxt              = cxt
+    i.enclosing_scope  = s
+    d.identifier       = add(array, i)
 
     return add(array, d)
 }

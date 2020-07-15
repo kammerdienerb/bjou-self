@@ -1,6 +1,6 @@
 set builder-build-command       "./debug_build.sh"
-set builder-error-parse-command 'awk -F" :: " \'/bJou ::/ { printf("%s:%s:%s:", $2, $3, $4); getline; gsub(/^[ \t]+Error:/, "", $0); print $0; }\''
+set builder-error-parse-command 'awk -F" :: " \'/bJou ::/ { printf("%s:%s:%s: ", $2, $3, $4); getline; gsub(/^\s+/, "", $0); print $0; }\''
 
-vimish-bind normal ctrl-t CMD less "./brun.sh 2>&1"
+vimish-bind normal ctrl-t CMD less "./brun.sh --no-parallel 2>&1"
 
 style-term-bg bold-light
